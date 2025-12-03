@@ -1,0 +1,14 @@
+{
+  "cutoff": null,
+  "separation_ok": true,
+  "split_rule": "ratio_samples_0.80",
+  "test_count": 268,
+  "test_end": "2025-11-19",
+  "test_start": "2024-10-15",
+  "train_count": 868,
+  "train_end": "2023-12-07",
+  "train_start": "2020-05-21",
+  "val_count": 96,
+  "val_end": "2024-05-07",
+  "val_start": "2023-12-08"
+}

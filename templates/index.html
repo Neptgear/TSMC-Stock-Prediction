@@ -1,0 +1,874 @@
+{% extends 'base.html' %}
+{% block content %}
+<form method="get" action="{{ url_for('index') }}">
+  <div class="card">
+    <div class="row">
+      <label for="ticker">Ticker</label>
+      <input type="text" id="ticker" name="ticker" value="{{ ticker }}" />
+
+      <label for="start">Start</label>
+      <input type="text" id="start" name="start" value="{{ start }}" />
+      <div id="recommended_start_hint" style="font-size:12px; color:#666; width:100%;">Suggested start for h={{ horizon }}: {{ recommended_start }}</div>
+
+      <label for="end">End</label>
+      <input type="text" id="end" name="end" value="{{ end or '' }}" placeholder="YYYY-MM-DD (optional)" />
+
+      <label for="split_date">Split Date</label>
+      <input type="text" id="split_date" name="split_date" value="{{ split_date or '' }}" placeholder="YYYY-MM-DD (train <=, test >)" />
+
+      <!-- Target fixed to Next Close; input removed from UI -->
+
+      <label for="preset">Preset</label>
+      <select id="preset" name="preset">
+        <option value="custom" {% if preset=='custom' %}selected{% endif %}>Custom</option>
+        <option value="1,60" {% if preset=='1,60' %}selected{% endif %}>h=1, w=60</option>
+        <option value="5,90" {% if preset=='5,90' %}selected{% endif %}>h=5, w=90</option>
+        <option value="7,120" {% if preset=='7,120' %}selected{% endif %}>h=7, w=120</option>
+        <option value="14,120" {% if preset=='14,120' %}selected{% endif %}>h=14, w=120</option>
+      </select>
+
+
+
+      <label for="horizon">Horizon</label>
+      <input type="number" id="horizon" name="horizon" value="{{ horizon }}" min="1" max="30" />
+
+      <label for="window">Window</label>
+      <input type="number" id="window" name="window" value="{{ window }}" min="5" max="1500" placeholder="e.g. 504 (~2y)" />
+
+      
+
+      <label for="epochs">Epochs</label>
+      <input type="number" id="epochs" name="epochs" value="{{ epochs }}" min="1" max="200" />
+
+      <button type="submit" name="do" value="view">Fetch</button>
+      <button type="submit" name="do" value="train_transformer">Train Transformer</button>
+      <button type="submit" name="do" value="train_tft">Train TFT</button>
+      <button type="submit" name="do" value="train_both">Train Both &amp; Compare</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary style="cursor:pointer; user-select:none;">Advanced</summary>
+      <div class="row" style="margin-top:8px;">
+        <label for="use_fundamentals">Use Fundamentals</label>
+        <select id="use_fundamentals" name="use_fundamentals">
+          <option value="1" {% if use_fundamentals %}selected{% endif %}>Yes</option>
+          <option value="0" {% if not use_fundamentals %}selected{% endif %}>No</option>
+        </select>
+
+        <label for="min_samples_fund" title="Minimum samples after adding fundamentals before falling back.">Min Samples (Fund)</label>
+        <input type="number" id="min_samples_fund" name="min_samples_fund" value="{{ min_samples_fund or 30 }}" min="1" max="1000" />
+
+        <label for="residualize">Residualize</label>
+        <select id="residualize" name="residualize">
+          <option value="1" {% if residualize %}selected{% endif %}>Yes</option>
+          <option value="0" {% if not residualize %}selected{% endif %}>No</option>
+        </select>
+
+        <label for="residual_base">Base</label>
+        <select id="residual_base" name="residual_base">
+          <option value="close" {% if residual_base=='close' %}selected{% endif %}>Close</option>
+          <option value="ma20" {% if residual_base=='ma20' %}selected{% endif %}>MA20</option>
+        </select>
+
+        <label for="scale_target">Scale Target</label>
+        <select id="scale_target" name="scale_target">
+          <option value="1" {% if scale_target %}selected{% endif %}>Yes</option>
+          <option value="0" {% if not scale_target %}selected{% endif %}>No</option>
+        </select>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary style="cursor:pointer; user-select:none;">Hyperparameters</summary>
+      <div class="row" style="margin-top:8px;">
+        <label for="batch_size">Batch</label>
+        <input type="number" id="batch_size" name="batch_size" value="{{ batch_size }}" min="1" max="2048" />
+
+        <label for="lr">LR</label>
+        <input type="number" step="0.0001" id="lr" name="lr" value="{{ lr }}" />
+
+        <label for="d_model">d_model</label>
+        <input type="number" id="d_model" name="d_model" value="{{ d_model }}" min="1" max="1024" />
+
+        <label for="nhead">Heads</label>
+        <input type="number" id="nhead" name="nhead" value="{{ nhead }}" min="1" max="16" />
+
+        <label for="num_layers">Layers</label>
+        <input type="number" id="num_layers" name="num_layers" value="{{ num_layers }}" min="1" max="12" />
+
+        <label for="dim_feedforward">FF Dim</label>
+        <input type="number" id="dim_feedforward" name="dim_feedforward" value="{{ dim_feedforward }}" min="8" max="4096" />
+
+        <label for="dropout">Dropout</label>
+        <input type="number" step="0.01" id="dropout" name="dropout" value="{{ dropout }}" min="0" max="0.9" />
+
+        <label for="patience">Patience</label>
+        <input type="number" id="patience" name="patience" value="{{ patience }}" min="1" max="50" />
+
+        <label for="weight_decay">Weight Decay</label>
+        <input type="number" step="0.00001" id="weight_decay" name="weight_decay" value="{{ weight_decay }}" min="0" max="0.01" />
+
+        <label for="loss">Loss</label>
+        <select id="loss" name="loss">
+          {% for opt in ['mse','huber','mae'] %}
+            <option value="{{ opt }}" {% if loss == opt %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+
+        <label for="huber_delta">Huber δ</label>
+        <input type="number" step="0.1" id="huber_delta" name="huber_delta" value="{{ huber_delta }}" min="0" max="10" />
+
+        <label for="clip_grad_norm">Clip Grad</label>
+        <input type="number" step="0.01" id="clip_grad_norm" name="clip_grad_norm" value="{{ clip_grad_norm }}" min="0" max="10" />
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <label for="train_ratio">Train Ratio</label>
+        <input type="number" step="0.01" id="train_ratio" name="train_ratio" value="{{ train_ratio }}" min="0.1" max="0.95" />
+
+        <label for="split_mode">Split Mode</label>
+        <select id="split_mode" name="split_mode">
+          <option value="ratio_time" {% if split_mode=='ratio_time' %}selected{% endif %}>Ratio (time)</option>
+          <option value="ratio_samples" {% if split_mode=='ratio_samples' %}selected{% endif %}>Ratio (samples)</option>
+          <option value="last_n_days" {% if split_mode=='last_n_days' %}selected{% endif %}>Last N bdays</option>
+        </select>
+
+        <label for="test_days">Test Days (for last_n_days)</label>
+        <input type="number" id="test_days" name="test_days" value="{{ test_days }}" min="0" max="252" />
+
+        <label for="walkforward_splits">Walk Splits</label>
+        <input type="number" id="walkforward_splits" name="walkforward_splits" value="{{ walkforward_splits }}" min="0" max="10" />
+
+        <label for="walkforward_epochs">Walk Epochs</label>
+        <input type="number" id="walkforward_epochs" name="walkforward_epochs" value="{{ walkforward_epochs or '' }}" min="1" max="50" placeholder="auto" />
+      </div>
+    </details>
+  </div>
+
+</form>
+
+<div class="card">
+  <h3>Load Saved Run</h3>
+  <form id="load-run-form" method="get" action="{{ url_for('index') }}">
+    <div class="row">
+      <label for="run_id">Run</label>
+      <select id="run_id" name="run_id">
+        <option value="">-- select saved run --</option>
+        {% if runs_list %}
+          {% for r in runs_list %}
+            <option value="{{ r.name }}" {% if run_id==r.name %}selected{% endif %}>
+              {{ r.name }}
+              {% if r.ticker is defined %} {{ r.ticker }}{% endif %}
+              {% if r.horizon is defined %} h={{ r.horizon }}{% endif %}
+              {% if r.window_size is defined %} w={{ r.window_size }}{% endif %}
+              {% if r.start is defined %} start={{ r.start }}{% endif %}
+              {% if r.end is defined %} end={{ r.end or 'latest' }}{% endif %}
+              {% if r.model_type is defined %} model={{ r.model_type }}{% endif %}
+              {% if r.target is defined %} tgt={{ r.target }}{% endif %}
+              {% if r.feature_cols is defined %} F={{ r.feature_cols|length }}{% endif %}
+              {% if r.rmse is defined %} (rmse={{ '%.3f'|format(r.rmse) }}){% endif %}
+            </option>
+          {% endfor %}
+        {% endif %}
+      </select>
+      <button type="submit" name="do" value="load">Load</button>
+      <button type="submit" name="do" value="delete_run" style="margin-left:8px;">Delete</button>
+      <button type="submit" name="do" value="delete_all_runs" style="margin-left:8px;">Delete All</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <details>
+    <summary style="cursor:pointer; user-select:none;">
+      <strong>Indicators Planned</strong>
+      <span style="color:#666; font-weight:400;">(Tech: {{ planned_feature_cols_tech|length if planned_feature_cols_tech else 0 }}, Fund: {{ planned_feature_cols_fund|length if planned_feature_cols_fund else 0 }})</span>
+    </summary>
+    <div class="grid" style="margin-top:8px;">
+      <div>
+        <h4>Technical</h4>
+        <ul>
+          {% for col in planned_feature_cols_tech or [] %}
+            <li>{{ col }}</li>
+          {% else %}
+            <li><em>None</em></li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div>
+        <h4>Fundamental</h4>
+        <ul>
+          {% for col in planned_feature_cols_fund or [] %}
+            <li>{{ col }}</li>
+          {% else %}
+            <li><em>None</em></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </details>
+</div>
+
+<div class="plots">
+  {% if alert %}
+  <div class="card" style="border-color:#f5c542; background:#fffaf0; color:#7a5c00;">
+    <strong>Heads up:</strong> {{ alert }}
+  </div>
+  {% endif %}
+  <div class="grid">
+    <div class="card"><div id="price" class="plot"></div></div>
+    <div class="card"><div id="volume" class="plot small"></div></div>
+  </div>
+  <div class="grid">
+    <div class="card"><div id="rsi" class="plot small"></div></div>
+    <div class="card"><div id="macd" class="plot small"></div></div>
+  </div>
+</div>
+
+{% if train_result %}
+  {% if not multi_results %}
+  <div class="card">
+    <h3>
+      Training Result
+      {% if train_result.model_name %}
+        ({{ train_result.model_name }})
+      {% endif %}
+    </h3>
+    <div style="margin-top:4px; font-size:13px; color:#555;">
+      {{ train_result.ticker or ticker }}
+      | h={{ train_result.horizon or horizon }}
+      | w={{ train_result.effective_window if train_result.effective_window is defined and train_result.effective_window else (train_result.window_size or window) }}
+      | start={{ train_result.start or start }}
+      {% if (train_result.split_date or split_date) %}
+        | split={{ train_result.split_date or split_date }}
+      {% endif %}
+      | end={{ train_result.end or end or 'latest' }}
+      {% if train_result.model_name or train_result.model_type %}
+        | model={{ train_result.model_name or train_result.model_type }}
+      {% endif %}
+    </div>
+    {% set hide_metrics = ['overfit_gap_rmse','rmse_ratio'] %}
+    <div class="metrics" style="margin-top:8px;">
+      {% for k, v in train_result.metrics.items() if k not in hide_metrics %}
+        <div class="metric" title="{{ metrics_help.get(k, '') }}&#10;{{ metrics_analysis.get(k, '') }}">
+          <strong>{{ k }}</strong><br/>{{ '%.6f'|format(v) }}
+          {% if metrics_analysis.get(k) %}
+            <div style="font-size:12px;color:#666;margin-top:4px;">{{ metrics_analysis.get(k) }}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    {% if train_result.split_info %}
+      {% set si = train_result.split_info %}
+      <div style="margin-top:8px; font-size:13px; color:#444;">
+        <strong>Data Split</strong>:
+        Train {{ si.train_start or 'n/a' }} -> {{ si.train_end or 'n/a' }} ({{ si.train_count or 0 }});
+        Test {{ si.test_start or 'n/a' }} -> {{ si.test_end or 'n/a' }} ({{ si.test_count or 0 }});
+        {% if si.cutoff %}Cutoff {{ si.cutoff }}{% endif %}
+        {% if si.split_rule %} ({{ si.split_rule }}){% endif %}
+        {% if si.separation_ok is not none %}
+          | Split respected: {{ 'Yes' if si.separation_ok else 'Check dates' }}
+          {% endif %}
+        </div>
+        {% endif %}
+    <div style="margin-top:8px;">
+      <strong>Effective Window</strong>: {{ train_result.effective_window if train_result.effective_window is defined else '' }}
+      {% if train_result.used_fundamentals is defined %}
+        &nbsp; | &nbsp; <strong>Used Fundamentals</strong>: {{ 'Yes' if train_result.used_fundamentals else 'No' }}
+      {% endif %}
+    </div>
+    {% if train_result.target == 'next_close' and ('mae' in train_result.metrics) %}
+      <div class="metric" style="margin-top:8px;">
+        <strong>Average Price Difference</strong><br/>
+        {{ '%.4f'|format(train_result.metrics['mae']) }}
+      </div>
+      {% if train_result.future_point and train_result.future_point.value is not none %}
+      <div class="metric" style="margin-top:4px;">
+        <strong>Future Pred (t+h)</strong><br/>
+        {{ '%.2f'|format(train_result.future_point.value) }}
+        &nbsp;({{ train_result.future_point.date }})
+      </div>
+      {% elif train_result.future_point_error %}
+      <div class="metric" style="margin-top:4px; color:#a94442; background:#fff5f5;">
+        <strong>Future Pred (t+h) failed</strong><br/>
+        {{ train_result.future_point_error }}
+      </div>
+      {% else %}
+      <div class="metric" style="margin-top:4px; color:#666; background:#f7f7f7;">
+        <strong>Future Pred (t+h)</strong><br/>
+        Unavailable (no future point returned)
+      </div>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% if train_result.diagnostics %}
+  {% set diag = train_result.diagnostics %}
+  <div class="card">
+    <h4>Diagnostics</h4>
+    {% set base = diag.get('baseline') %}
+    {% if base %}
+    <table class="metrics-table" style="margin-top:4px; font-size:13px;">
+      <thead><tr><th>Baseline</th><th>rmse</th><th>mae</th><th>r2</th><th>rmse gain vs model</th></tr></thead>
+      <tbody>
+        {% for bname, bm in base.items() %}
+          <tr>
+            <td>{{ bname }}</td>
+            <td>{% if bm.rmse is defined %}{{ '%.4f'|format(bm.rmse) }}{% else %}-{% endif %}</td>
+            <td>{% if bm.mae is defined %}{{ '%.4f'|format(bm.mae) }}{% else %}-{% endif %}</td>
+            <td>{% if bm.r2 is defined %}{{ '%.4f'|format(bm.r2) }}{% else %}-{% endif %}</td>
+            {% set gain = diag.get('rmse_gain', {}).get(bname) %}
+            <td>{% if gain is not none %}{{ '%.1f'|format(gain) }}%{% else %}-{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if diag.learning_curves %}
+      {% set lc = diag.learning_curves %}
+      {% set epochs_run = lc.get('epochs_ran') or (lc.get('train')|length if lc.get('train') is defined else (lc.get('val')|length if lc.get('val') is defined else '')) %}
+      <div style="margin-top:6px; font-size:13px;">
+        <strong>Learning Curves</strong>:
+        Ran {{ epochs_run }} epochs;
+        {% if lc.get('train_drop_pct') is not none %}train ↓ {{ '%.1f'|format(lc.get('train_drop_pct')) }}%{% endif %}
+        {% if lc.get('val_drop_pct') is not none %}| val change {{ '%.1f'|format(lc.get('val_drop_pct')) }}%{% endif %}
+        {% if lc.get('best_val_epoch') is not none %}| best val @ {{ lc.get('best_val_epoch') }}{% endif %}
+        {% if lc.get('val_last_over_min_pct') is not none %}| last vs best: {{ '%.1f'|format(lc.get('val_last_over_min_pct')) }}%{% endif %}
+        {% if lc.get('train_declining') is not none %}| train trend: {{ 'down' if lc.get('train_declining') else 'up' }}{% endif %}
+        {% if lc.get('val_early_rise') is not none %}| early val rise: {{ 'yes' if lc.get('val_early_rise') else 'no' }}{% endif %}
+      </div>
+    {% endif %}
+    {% if diag.residual_acf %}
+      <div style="margin-top:6px; font-size:13px;">
+        <strong>Residual ACF</strong>:
+        Max |acf| {{ '%.3f'|format(diag.residual_acf.max_abs) }} at lag {{ diag.residual_acf.max_at_lag }};
+        {{ 'structured' if diag.residual_acf.structured else 'looks like noise' }}
+      </div>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% endif %}
+
+{# Single / dual prediction plots and save button (primary train_result) #}
+<div class="card">
+  <h3>
+    Predictions
+    {% if multi_results %}
+      (both models)
+    {% elif train_result.model_name %}
+      ({{ (train_result.model_name or '')|replace(' Seq2Seq','')|replace(' Full','') }})
+    {% endif %}
+  </h3>
+  <div style="margin-top:4px; font-size:13px; color:#555;">
+    {{ train_result.ticker or ticker }}
+    | h={{ train_result.horizon or horizon }}
+    | w={{ train_result.effective_window if train_result.effective_window is defined and train_result.effective_window else (train_result.window_size or window) }}
+    | start={{ train_result.start or start }}
+    {% if (train_result.split_date or split_date) %}
+      | split={{ train_result.split_date or split_date }}
+    {% endif %}
+    | end={{ train_result.end or end or 'latest' }}
+    {% if train_result.model_name or train_result.model_type %}
+      | model={{ train_result.model_name or train_result.model_type }}
+    {% endif %}
+  </div>
+  {% if multi_results %}
+    <div class="grid" style="margin-top:12px;">
+      {% for res in multi_results %}
+        <div>
+          <h4 style="margin:0 0 2px 0;">
+            {% set name_clean = (res.model_name or res.model_type or ('Model ' ~ loop.index))|replace(' Seq2Seq','')|replace(' Full','') %}
+            {{ name_clean }}
+          </h4>
+          {# Per-model quick metrics summary above each chart #}
+          {% if res.metrics %}
+          {% set hide_metrics = ['overfit_gap_rmse','rmse_ratio'] %}
+          <div class="metrics" style="margin:4px 0 4px 0;">
+            {% for k, v in res.metrics.items() if k not in hide_metrics %}
+              <div class="metric" title="{{ metrics_help.get(k, '') }}">
+                <strong>{{ k }}</strong><br/>
+                {{ '%.6f'|format(v) }}
+              </div>
+            {% endfor %}
+          </div>
+          {% set diag = res.get('diagnostics') %}
+          {% if diag %}
+          <div style="margin:4px 0 6px 0; font-size:12px;">
+            <strong>Diagnostics</strong>
+            {% set base = diag.get('baseline') %}
+            {% if base %}
+            <table class="metrics-table" style="margin-top:4px; font-size:12px;">
+              <thead><tr><th>Baseline</th><th>rmse</th><th>mae</th><th>r2</th><th>rmse gain vs model</th></tr></thead>
+              <tbody>
+                {% for bname, bm in base.items() %}
+                  <tr>
+                    <td>{{ bname }}</td>
+                    <td>{% if bm.rmse is defined %}{{ '%.4f'|format(bm.rmse) }}{% else %}-{% endif %}</td>
+                    <td>{% if bm.mae is defined %}{{ '%.4f'|format(bm.mae) }}{% else %}-{% endif %}</td>
+                    <td>{% if bm.r2 is defined %}{{ '%.4f'|format(bm.r2) }}{% else %}-{% endif %}</td>
+                    {% set gain = diag.get('rmse_gain', {}).get(bname) %}
+                    <td>{% if gain is not none %}{{ '%.1f'|format(gain) }}%{% else %}-{% endif %}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% endif %}
+            {% if diag.learning_curves %}
+              <div style="margin-top:4px;">
+                <em>Learning curves:</em>
+                {% set lc = diag.learning_curves %}
+                {% set epochs_run = lc.get('epochs_ran') or (lc.get('train')|length if lc.get('train') is defined else (lc.get('val')|length if lc.get('val') is defined else '')) %}
+                Ran {{ epochs_run }} epochs;
+                {% if lc.get('train_drop_pct') is not none %}train ↓ {{ '%.1f'|format(lc.get('train_drop_pct')) }}%{% endif %}
+                {% if lc.get('val_drop_pct') is not none %}| val change {{ '%.1f'|format(lc.get('val_drop_pct')) }}%{% endif %}
+                {% if lc.get('best_val_epoch') is not none %}| best val @ {{ lc.get('best_val_epoch') }}{% endif %}
+                {% if lc.get('val_last_over_min_pct') is not none %}| last vs best: {{ '%.1f'|format(lc.get('val_last_over_min_pct')) }}%{% endif %}
+                {% if lc.get('train_declining') is not none %}| train trend: {{ 'down' if lc.get('train_declining') else 'up' }}{% endif %}
+                {% if lc.get('val_early_rise') is not none %}| early val rise: {{ 'yes' if lc.get('val_early_rise') else 'no' }}{% endif %}
+              </div>
+            {% endif %}
+            {% if diag.residual_acf %}
+              <div style="margin-top:4px;">
+                <em>Residual ACF:</em>
+                Max |acf| {{ '%.3f'|format(diag.residual_acf.max_abs) }} at lag {{ diag.residual_acf.max_at_lag }};
+                {{ 'structured' if diag.residual_acf.structured else 'looks like noise' }}
+              </div>
+            {% endif %}
+          </div>
+          {% endif %}
+          {# Per-model Average Price Difference (MAE) for next_close targets #}
+          {% set mae_val = res.metrics.get('mae') %}
+          {% if mae_val is not none and (res.target or train_result.target) == 'next_close' %}
+          <div class="metric" style="margin:4px 0 2px 0;">
+            <strong>Average Price Difference</strong><br/>
+            {{ '%.4f'|format(mae_val) }}
+          </div>
+          {% set fp = res.future_point %}
+          {% if fp and fp.value is not none %}
+          <div class="metric" style="margin:2px 0 4px 0;">
+            <strong>Future Pred (t+h)</strong><br/>
+            {{ '%.2f'|format(fp.value) }}
+            &nbsp;({{ fp.date }})
+          </div>
+          {% elif res.future_point_error %}
+          <div class="metric" style="margin:2px 0 4px 0; color:#a94442; background:#fff5f5;">
+            <strong>Future Pred (t+h) failed</strong><br/>
+            {{ res.future_point_error }}
+          </div>
+          {% else %}
+          <div class="metric" style="margin:2px 0 4px 0; color:#666; background:#f7f7f7;">
+            <strong>Future Pred (t+h)</strong><br/>
+            Unavailable (no future point returned)
+          </div>
+          {% endif %}
+          {% endif %}
+          {% endif %}
+
+          {# Simple per-model RMSE comparison hint vs the other model, with RMSE tooltip #}
+          {% set this_rmse = (res.metrics['rmse'] if res.metrics and 'rmse' in res.metrics else None) %}
+          {% if multi_results|length == 2 and this_rmse is not none %}
+            {% set other = multi_results[1] if loop.index0 == 0 else multi_results[0] %}
+            {% set other_rmse = (other.metrics['rmse'] if other.metrics and 'rmse' in other.metrics else None) %}
+            {% if other_rmse is not none %}
+              {% set diff = this_rmse - other_rmse %}
+              <div style="font-size:12px; color:#666; margin-bottom:4px;"
+                   title="{{ metrics_help.get('rmse', '') }}">
+                rmse={{ '%.3f'|format(this_rmse) }}
+                {% if diff > 0 %}
+                  (higher than {{ other.model_name or other.model_type }} by {{ '%.3f'|format(diff) }})
+                {% elif diff < 0 %}
+                  (lower than {{ other.model_name or other.model_type }} by {{ '%.3f'|format(-diff) }})
+                {% else %}
+                  (same as {{ other.model_name or other.model_type }})
+                {% endif %}
+              </div>
+            {% endif %}
+          {% endif %}
+          {% if res.split_info %}
+            {% set si = res.split_info %}
+            <div style="font-size:12px; color:#444; margin:4px 0 6px 0;">
+              <strong>Data Split</strong>:
+              Train {{ si.train_start or 'n/a' }} -> {{ si.train_end or 'n/a' }} ({{ si.train_count or 0 }});
+              Test {{ si.test_start or 'n/a' }} -> {{ si.test_end or 'n/a' }} ({{ si.test_count or 0 }});
+              {% if si.cutoff %}Cutoff {{ si.cutoff }}{% endif %}
+              {% if si.split_rule %} ({{ si.split_rule }}){% endif %}
+              {% if si.separation_ok is not none %} | Split respected: {{ 'Yes' if si.separation_ok else 'Check dates' }}{% endif %}
+            </div>
+          {% endif %}
+          <div id="predictions_{{ res.model_type or ('model_' ~ loop.index) }}" class="plot"></div>
+          {% set lc = res.diagnostics.learning_curves if res.diagnostics else None %}
+          {% if lc and (lc.get('train') or lc.get('val')) %}
+          <div style="margin-top:8px;">
+            <div style="font-size:12px; color:#555; margin-bottom:4px;">Train vs Val Loss (overfit check)</div>
+            <div id="lc_{{ res.model_type or ('model_' ~ loop.index) }}" class="plot small"></div>
+          </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div id="predictions" class="plot"></div>
+  {% endif %}
+  {% if not multi_results %}
+    {% set lc_single = train_result.diagnostics.learning_curves if train_result.diagnostics else None %}
+    {% if lc_single and (lc_single.get('train') or lc_single.get('val')) %}
+      <div style="margin-top:12px;">
+        <div style="font-size:13px; color:#555; margin-bottom:4px;">Train vs Val Loss (overfit check)</div>
+        <div id="learning_curve" class="plot small"></div>
+      </div>
+    {% endif %}
+  {% endif %}
+  <form method="post" action="{{ url_for('index') }}" style="margin-top:8px;">
+    {% if multi_results %}
+      <input type="hidden" name="tr_json" value='{{ multi_results | tojson }}'>
+      <button type="submit" name="do" value="save_run">Save Both Runs</button>
+    {% else %}
+      <input type="hidden" name="tr_json" value='{{ train_result | tojson }}'>
+      <button type="submit" name="do" value="save_run">Save Run</button>
+    {% endif %}
+  </form>
+</div>
+
+  <div class="card">
+    <details>
+      <summary style="cursor:pointer; user-select:none;">
+        <strong>Indicators Used</strong>
+        <span style="color:#666; font-weight:400;">(Tech: {{ (train_result.get('feature_cols_tech') or []) | length }}, Fund: {{ (train_result.get('feature_cols_fund') or []) | length }})</span>
+      </summary>
+      <div class="grid" style="margin-top:8px;">
+        <div>
+          <h4>Technical</h4>
+          <ul>
+            {% for col in (train_result.get('feature_cols_tech') or []) %}
+              <li>{{ col }}</li>
+            {% else %}
+              <li><em>None</em></li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div>
+          <h4>Fundamental</h4>
+          <ul>
+            {% for col in (train_result.get('feature_cols_fund') or []) %}
+              <li>{{ col }}</li>
+            {% else %}
+              <li><em>None</em></li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </details>
+  </div>
+{% if multi_results %}
+<div class="card">
+  <details open>
+    <summary style="cursor:pointer; user-select:none;">
+      <strong>Model Comparison</strong>
+      <span style="color:#666; font-weight:400; margin-left:6px;">(expand)</span>
+    </summary>
+    <div style="margin-top:8px;">
+      <table class="metrics-table" style="font-size:13px;">
+        <thead>
+          <tr>
+            <th style="width:150px;">Metric</th>
+            {% for res in multi_results %}
+              {% set name_clean = (res.model_name or res.model_type or ('Model ' ~ loop.index))|replace(' Seq2Seq','')|replace(' Full','') %}
+              <th style="width:160px;">{{ name_clean }}</th>
+            {% endfor %}
+            <th style="width:220px;">Winner</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if multi_results[0].metrics %}
+            {% for k, v in multi_results[0].metrics.items() %}
+              {% if k not in ['direction_acc','precision_up','recall_up','f1_up','precision_down','recall_down','f1_down','macro_f1','weighted_f1','f1_stability','overfit_gap_rmse','rmse_ratio'] %}
+              {% set m0 = multi_results[0].metrics.get(k) %}
+              {% set m1 = multi_results[1].metrics.get(k) if multi_results|length > 1 else None %}
+              {% set w_name = '' %}
+              {% set w_note = '' %}
+              {% if m0 is not none and m1 is not none and multi_results|length == 2 %}
+                {% set name0 = (multi_results[0].model_name or multi_results[0].model_type)|replace(' Seq2Seq','')|replace(' Full','') %}
+                {% set name1 = (multi_results[1].model_name or multi_results[1].model_type)|replace(' Seq2Seq','')|replace(' Full','') %}
+                {% if k in ['mse','rmse','mae','mape','rmse_pct_price','rmse_ratio','overfit_gap_rmse'] %}
+                  {% if m0 < m1 %}
+                    {% set w_name = name0 %}
+                    {% set w_note = 'lower by ' ~ ('%.3f'|format(m1 - m0)) %}
+                  {% elif m1 < m0 %}
+                    {% set w_name = name1 %}
+                    {% set w_note = 'lower by ' ~ ('%.3f'|format(m0 - m1)) %}
+                  {% else %}
+                    {% set w_name = 'Tie' %}
+                    {% set w_note = '' %}
+                  {% endif %}
+                {% elif k == 'r2' %}
+                  {% if m0 > m1 %}
+                    {% set w_name = name0 %}
+                    {% set w_note = 'higher by ' ~ ('%.3f'|format(m0 - m1)) %}
+                  {% elif m1 > m0 %}
+                    {% set w_name = name1 %}
+                    {% set w_note = 'higher by ' ~ ('%.3f'|format(m1 - m0)) %}
+                  {% else %}
+                    {% set w_name = 'Tie' %}
+                    {% set w_note = '' %}
+                  {% endif %}
+                {% endif %}
+              {% endif %}
+              <tr>
+                <td title="{{ metrics_help.get(k, '') }}">{{ k }}</td>
+                {% for res in multi_results %}
+                  {% set val = res.metrics.get(k) %}
+                  <td title="{{ metrics_help.get(k, '') }}">
+                    {% if val is not none %}
+                      {{ '%.4f'|format(val) }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                {% endfor %}
+                <td>
+                  {% if w_name %}
+                    {{ w_name }}{% if w_note %} <span style="color:#666;">({{ w_note }})</span>{% endif %}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+{% endif %}
+
+<script>
+  (function(){
+    function renderLearningCurve(divId, lc, label){
+      const el = document.getElementById(divId);
+      if (!el || !lc) return;
+      const traces = [];
+      if (Array.isArray(lc.train) && lc.train.length){
+        const x = lc.train.map((_, i) => i + 1);
+        traces.push({x, y: lc.train, name: 'Train', type: 'scatter', mode: 'lines+markers',
+          line: {color: '#1f77b4'}, hovertemplate: 'Epoch %{x}<br>Train: %{y:.4f}<extra></extra>'});
+      }
+      if (Array.isArray(lc.val) && lc.val.length){
+        const x = lc.val.map((_, i) => i + 1);
+        traces.push({x, y: lc.val, name: 'Validation', type: 'scatter', mode: 'lines+markers',
+          line: {color: '#ff7f0e', dash: 'dash'}, hovertemplate: 'Epoch %{x}<br>Val: %{y:.4f}<extra></extra>'});
+      }
+      if (!traces.length) return;
+      const allY = traces.flatMap(t => t.y || []);
+      const layout = {
+        title: label ? `Train vs Val Loss (${label})` : 'Train vs Val Loss',
+        xaxis: {title: 'Epoch', dtick: Math.max(1, Math.round(Math.max(...traces.map(t => t.x.length)) / 6))},
+        yaxis: {title: 'Loss', rangemode: 'tozero'},
+        hovermode: 'x unified',
+        showlegend: true
+      };
+      if (allY.length && allY.every(v => v > 0)){
+        const maxY = Math.max(...allY);
+        const minY = Math.min(...allY);
+        if (maxY / Math.max(minY, 1e-9) > 50){
+          layout.yaxis.type = 'log';
+        }
+      }
+      Plotly.newPlot(divId, traces, layout, {responsive: true});
+    }
+
+    {% if multi_results %}
+      const models = {{ multi_results | tojson }};
+      models.forEach(function(tr, idx){
+        const x = tr.test_dates || [];
+        const yTrue = tr.y_true || [];
+        const yPred = tr.y_pred || [];
+        const target = tr.target || 'next_close';
+
+        const traces = [
+          {x, y: yTrue, name: 'True', type: 'scatter', mode: 'lines',
+           hovertemplate: '%{x}<br>True: %{y:.2f}<extra></extra>'},
+          {x, y: yPred, name: 'Pred', type: 'scatter', mode: 'lines',
+           hovertemplate: '%{x}<br>Pred: %{y:.2f}<extra></extra>'},
+        ];
+
+        if (tr.future_point && tr.future_point.date && tr.future_point.value !== undefined && target === 'next_close') {
+          traces.push({
+            x: [tr.future_point.date],
+            y: [tr.future_point.value],
+            name: 'Future',
+            type: 'scatter',
+            mode: 'markers+text',
+            marker: {size: 9, color: '#d62728'},
+            text: ['t+h'], textposition: 'top center',
+            hovertemplate: '%{x}<br>Future Pred: %{y:.2f}<extra></extra>'
+          });
+        }
+
+        if (tr.actual_target && tr.actual_target.date && tr.actual_target.value !== undefined) {
+          traces.push({
+            x: [tr.actual_target.date],
+            y: [tr.actual_target.value],
+            name: 'Actual (t+h)',
+            type: 'scatter',
+            mode: 'markers+text',
+            marker: {size: 9, color: '#2ca02c'},
+            text: ['actual'], textposition: 'top center',
+            hovertemplate: '%{x}<br>Actual: %{y:.2f}<extra></extra>'
+          });
+        }
+
+        const layout = {
+          title: target === 'next_close' ? 'Predictions vs Actual (Close)' : 'Predictions vs Actual (Return %)',
+          hovermode: 'x unified'
+        };
+        const divId = 'predictions_' + (tr.model_type || ('model_' + (idx + 1)));
+        const el = document.getElementById(divId);
+        if (el) {
+          Plotly.newPlot(divId, traces, layout, {responsive: true});
+        }
+        const lc = tr.diagnostics && tr.diagnostics.learning_curves;
+        const lcDiv = 'lc_' + (tr.model_type || ('model_' + (idx + 1)));
+        renderLearningCurve(lcDiv, lc, tr.model_name || tr.model_type || '');
+      });
+    {% else %}
+      const tr = {{ train_result | tojson }};
+      const x = tr.test_dates;
+      const yTrue = tr.y_true;
+      const yPred = tr.y_pred;
+      const target = tr.target;
+
+      const traces = [
+        {x, y: yTrue, name: 'True', type: 'scatter', mode: 'lines',
+         hovertemplate: '%{x}<br>True: %{y:.2f}<extra></extra>'},
+        {x, y: yPred, name: 'Pred', type: 'scatter', mode: 'lines',
+         hovertemplate: '%{x}<br>Pred: %{y:.2f}<extra></extra>'},
+      ];
+
+      if (tr.future_point && tr.future_point.date && tr.future_point.value !== undefined && target === 'next_close') {
+        traces.push({
+          x: [tr.future_point.date],
+          y: [tr.future_point.value],
+          name: 'Future',
+          type: 'scatter',
+          mode: 'markers+text',
+          marker: {size: 9, color: '#d62728'},
+          text: ['t+h'], textposition: 'top center',
+          hovertemplate: '%{x}<br>Future Pred: %{y:.2f}<extra></extra>'
+        });
+      }
+
+      if (tr.actual_target && tr.actual_target.date && tr.actual_target.value !== undefined) {
+        traces.push({
+          x: [tr.actual_target.date],
+          y: [tr.actual_target.value],
+          name: 'Actual (t+h)',
+          type: 'scatter',
+          mode: 'markers+text',
+          marker: {size: 9, color: '#2ca02c'},
+          text: ['actual'], textposition: 'top center',
+          hovertemplate: '%{x}<br>Actual: %{y:.2f}<extra></extra>'
+        });
+      }
+
+      const layout = {
+        title: target === 'next_close' ? 'Predictions vs Actual (Close)' : 'Predictions vs Actual (Return %)',
+        hovermode: 'x unified'
+      };
+      Plotly.newPlot('predictions', traces, layout, {responsive: true});
+      const lc = tr.diagnostics && tr.diagnostics.learning_curves;
+      renderLearningCurve('learning_curve', lc, tr.model_name || tr.model_type || '');
+    {% endif %}
+  })();
+</script>
+{% endif %}
+
+{# Multi-horizon UI removed to focus on 1-day accuracy #}
+
+<script>
+  (function(){
+    const charts = {{ charts_json | safe }};
+    function render(id, fig){ if(fig) Plotly.newPlot(id, fig.data, fig.layout, {responsive:true}); }
+    render('price', charts.price);
+    render('volume', charts.volume);
+    render('rsi', charts.rsi);
+    render('macd', charts.macd);
+  })();
+  // Preset wiring
+  (function(){
+    const preset = document.getElementById('preset');
+    const hEl = document.getElementById('horizon');
+    const wEl = document.getElementById('window');
+
+    const hpPresets = {
+      h1: {epochs:12,batch_size:64,lr:0.0002,d_model:48,nhead:8,num_layers:2,dim_feedforward:128,dropout:0.50,patience:6,weight_decay:0.0035,loss:'huber',huber_delta:0.5,clip_grad_norm:0.25,train_ratio:0.6,split_mode:'ratio_time',test_days:0,walkforward_splits:8,walkforward_epochs:12},
+      h5: {epochs:20,batch_size:64,lr:0.0002,d_model:48,nhead:8,num_layers:2,dim_feedforward:128,dropout:0.50,patience:6,weight_decay:0.005,loss:'huber',huber_delta:0.7,clip_grad_norm:0.25,train_ratio:0.8,split_mode:'ratio_time',test_days:0,walkforward_splits:4,walkforward_epochs:10},
+      h7: {epochs:25,batch_size:64,lr:0.0001,d_model:48,nhead:8,num_layers:2,dim_feedforward:128,dropout:0.50,patience:8,weight_decay:0.0075,loss:'huber',huber_delta:1.0,clip_grad_norm:0.25,train_ratio:0.8,split_mode:'ratio_time',test_days:0,walkforward_splits:4,walkforward_epochs:10},
+      h14: {epochs:25,batch_size:64,lr:0.0001,d_model:48,nhead:8,num_layers:2,dim_feedforward:128,dropout:0.55,patience:8,weight_decay:0.01,loss:'huber',huber_delta:1.0,clip_grad_norm:0.25,train_ratio:0.82,split_mode:'ratio_time',test_days:0,walkforward_splits:4,walkforward_epochs:12},
+    };
+
+    function bucket(h){
+      if(h <= 3) return 'h1';
+      if(h <= 5) return 'h5';
+      if(h <= 7) return 'h7';
+      return 'h14';
+    }
+    function applyHP(h){
+      const b = bucket(h);
+      const hp = hpPresets[b];
+      const fields = [
+        ['epochs','epochs'],['batch_size','batch_size'],['lr','lr'],['d_model','d_model'],['nhead','nhead'],
+        ['num_layers','num_layers'],['dim_feedforward','dim_feedforward'],['dropout','dropout'],['patience','patience'],
+        ['loss','loss'],['huber_delta','huber_delta'],['clip_grad_norm','clip_grad_norm'],['weight_decay','weight_decay'],['train_ratio','train_ratio'],
+        ['split_mode','split_mode'],['test_days','test_days'],['walkforward_splits','walkforward_splits'],['walkforward_epochs','walkforward_epochs'],
+      ];
+      fields.forEach(([id,key])=>{
+        const el = document.getElementById(id);
+        if(!el) return;
+        const val = hp[key];
+        if(el.tagName === 'SELECT'){
+          el.value = String(val);
+        } else {
+          el.value = val;
+        }
+      });
+    }
+    function recommendStart(h){
+      const years = h <=3 ? 7 : (h<=10 ? 9 : 12);
+      const today = new Date();
+      const start = new Date(today.getFullYear()-years, today.getMonth(), today.getDate());
+      return start.toISOString().slice(0,10);
+    }
+    function updateRecommended(h){
+      const hint = document.getElementById('recommended_start_hint');
+      const suggested = recommendStart(h);
+      if(hint){
+        hint.textContent = `Suggested start for h=${h}: ${suggested}`;
+      }
+    }
+
+    function applyPreset(val){
+      if(!val || val === 'custom') return;
+      const parts = val.split(',');
+      if(parts.length === 2){
+        const h = parseInt(parts[0], 10);
+        const w = parseInt(parts[1], 10);
+        if(Number.isFinite(h)) { hEl.value = h; applyHP(h); updateRecommended(h); }
+        if(Number.isFinite(w)) wEl.value = w;
+      }
+    }
+    if(preset){
+      preset.addEventListener('change', (e)=> applyPreset(e.target.value));
+      // Apply on load for deep links
+      applyPreset(preset.value);
+    }
+  })();
+  </script>
+{% endblock %}
+
+
+
+

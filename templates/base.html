@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TA Stock Transformer</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 0 16px 32px; }
+      header { padding: 16px 0; }
+      .container { max-width: 1200px; margin: 0 auto; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .grid-1 { display: grid; grid-template-columns: 1fr; gap: 16px; }
+      form .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+      form label { display: inline-block; margin-right: 8px; font-weight: 600; }
+      form input, form select { padding: 6px 8px; }
+      button { padding: 8px 12px; cursor: pointer; }
+      .card { border: 1px solid #eee; padding: 12px; border-radius: 6px; background: #fff; }
+      .metrics { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 8px; }
+      .metric { border: 1px solid #eee; padding: 8px; border-radius: 6px; background: #fafafa; }
+      .plots { margin-top: 12px; }
+      .plot { width: 100%; height: 420px; }
+      .plot.small { height: 300px; }
+      footer { margin-top: 24px; color: #666; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h2>TA Stock Prediction — Transformer</h2>
+      </header>
+      {% block content %}{% endblock %}
+      <footer>
+        Built with Flask · Plotly · PyTorch
+      </footer>
+    </div>
+  </body>
+  </html>
+

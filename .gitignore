@@ -1,0 +1,3 @@
+# Ignore local secrets and env files
+secrets_local.py
+.env

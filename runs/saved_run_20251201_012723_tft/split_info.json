@@ -1,0 +1,11 @@
+{
+  "cutoff": null,
+  "separation_ok": true,
+  "split_rule": "ratio_samples_0.80",
+  "test_count": 212,
+  "test_end": "2025-11-26",
+  "test_start": "2024-11-11",
+  "train_count": 847,
+  "train_end": "2024-11-08",
+  "train_start": "2021-04-21"
+}

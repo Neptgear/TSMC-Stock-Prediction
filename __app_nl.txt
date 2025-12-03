@@ -1,0 +1,160 @@
+   1: import os
+   2: import json
+   3: import datetime as dt
+   4: from typing import Optional, Dict, Any
+   5: 
+   6: import numpy as np
+   7: import pandas as pd
+   8: from flask import Flask, render_template, request, redirect, url_for
+   9: 
+  10: from data_fetch import get_ohlcv
+  11: from ta_features import compute_features, compute_indicators_only, get_default_feature_columns
+  12: from train_transformer import TrainConfig, run_training, standardize_ohlcv_columns
+  13: 
+  14: 
+  15: def create_app() -> Flask:
+  16:     app = Flask(__name__)
+  17:     app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "devkey")
+  18: 
+  19:     @app.route("/")
+  20:     def index():
+  21:         # Read params
+  22:         ticker = request.args.get("ticker", "2330.TW")
+  23:         # Default to ~3 years back to support 2y lookback + 1y horizon
+  24:         default_start = (dt.datetime.now(dt.UTC) - dt.timedelta(days=365*3 + 30)).date().isoformat()
+  25:         start = request.args.get("start", default_start)
+  26:         end = request.args.get("end", None)
+  27:         target = request.args.get("target", "next_close")
+  28:         horizon = int(request.args.get("horizon", 1))
+  29:         # Residualization controls for price target
+  30:         residualize = request.args.get("residualize", "1") == "1"
+  31:         residual_base = request.args.get("residual_base", "close")
+  32:         window = int(request.args.get("window", 30))
+  33:         epochs = int(request.args.get("epochs", 30))
+  34:         scale_target = request.args.get("scale_target", "0") == "1"
+  35:         preset = request.args.get("preset", "custom")
+  36:         auto_window = request.args.get("auto_window", "0") == "1"
+  37:         action = request.args.get("do", "view")
+  38: 
+  39:         # Fetch OHLCV and precompute indicators for charts (robust to horizon)
+  40:         df = get_ohlcv(ticker_yt=ticker, start=start, end=end, auto_adjust=True)
+  41:         df = standardize_ohlcv_columns(df)
+  42:         feat_for_charts = compute_indicators_only(df, include_extra=True)
+  43: 
+  44:         # Prepare charts (Close with MAs, Volume, RSI, MACD)
+  45:         charts = build_charts(feat_for_charts)
+  46: 
+  47:         train_result: Optional[Dict[str, Any]] = None
+  48:         alert: Optional[str] = None
+  49:         multi_results: Optional[list] = None
+  50:         if action == "train":
+  51:             try:
+  52:                 cfg = TrainConfig(
+  53:                     ticker=ticker,
+  54:                     start=start,
+  55:                 target=target,
+  56:                 horizon=horizon,
+  57:                 window_size=window,
+  58:                 epochs=epochs,
+  59:                 scale_target=scale_target,
+  60:                 residualize=residualize,
+  61:                 residual_base=residual_base,
+  62:                 end=end,
+  63:                 auto_window=auto_window,
+  64:             )
+  65:                 train_result = run_training(cfg)
+  66:                 # Convert numpy arrays to lists for JSON embedding
+  67:                 train_result["y_true"] = train_result["y_true"].tolist()
+  68:                 train_result["y_pred"] = train_result["y_pred"].tolist()
+  69:             except Exception as ex:  # surface friendly alert when history is insufficient
+  70:                 # Compute a helpful message with required history estimate
+  71:                 try:
+  72:                     required_days = 252 + max(0, window - 1) + max(1, horizon)
+  73:                     if len(df.index) <= required_days:
+  74:                         first_target = df.index[0] + pd.tseries.offsets.BDay(required_days)
+  75:                         alert = (
+  76:                             f"Not enough history for window={window}, horizon={horizon}. "
+  77:                             f"Need ≈{required_days} trading days after start. "
+  78:                             f"Earliest target date would be {getattr(first_target, 'date', lambda: first_target)()} — "
+  79:                             f"pick an earlier Start, smaller Window, or lower Horizon."
+  80:                         )
+  81:                     else:
+  82:                         alert = f"Training failed: {type(ex).__name__}: {ex}"
+  83:                 except Exception:
+  84:                     alert = f"Training failed: {type(ex).__name__}: {ex}"
+  85: 
+  86:         # Always render the page (both view and train flows)
+  87:             return render_template(
+  88:                 "index.html",
+  89:                 ticker=ticker,
+  90:                 start=start,
+  91:                 end=end,
+  92:                 target=target,
+  93:                 horizon=horizon,
+  94:                 window=window,
+  95:                 epochs=epochs,
+  96:                 scale_target=scale_target,
+  97:                 residualize=residualize,
+  98:                 residual_base=residual_base,
+  99:                 preset=preset,
+ 100:                 auto_window=auto_window,
+ 101:                 charts_json=json.dumps(charts),
+ 102:                 train_result=train_result,
+ 103:                 multi_results=None,
+ 104:                 alert=alert,
+ 105:             )
+ 106: 
+ 107:     return app
+ 108: 
+ 109: 
+ 110: def build_charts(feat_df: pd.DataFrame) -> Dict[str, Any]:
+ 111:     """Prepare chart data consumable by Plotly in the frontend."""
+ 112:     import plotly.graph_objs as go
+ 113:     from plotly.utils import PlotlyJSONEncoder
+ 114: 
+ 115:     charts: Dict[str, Any] = {}
+ 116:     idx = feat_df.index
+ 117: 
+ 118:     # Price + MAs
+ 119:     price_traces = [
+ 120:         go.Scatter(x=idx, y=feat_df["Close"], name="Close", mode="lines")
+ 121:     ]
+ 122:     for ma_col, name in [("ma5", "MA5"), ("ma10", "MA10"), ("ma20", "MA20")]:
+ 123:         if ma_col in feat_df.columns:
+ 124:             price_traces.append(go.Scatter(x=idx, y=feat_df[ma_col], name=name, mode="lines"))
+ 125:     price_layout = go.Layout(title="Price & Moving Averages", legend={"orientation": "h"})
+ 126:     price_fig = go.Figure(data=price_traces, layout=price_layout)
+ 127:     charts["price"] = json.loads(price_fig.to_json())
+ 128: 
+ 129:     # Volume
+ 130:     if "Volume" in feat_df.columns:
+ 131:         vol_fig = go.Figure(data=[go.Bar(x=idx, y=feat_df["Volume"], name="Volume")], layout=go.Layout(title="Volume"))
+ 132:         charts["volume"] = json.loads(vol_fig.to_json())
+ 133: 
+ 134:     # RSI
+ 135:     if "rsi14" in feat_df.columns:
+ 136:         rsi_fig = go.Figure(
+ 137:             data=[go.Scatter(x=idx, y=feat_df["rsi14"], name="RSI14", mode="lines")],
+ 138:             layout=go.Layout(title="RSI(14)", yaxis={"range": [0, 100]}),
+ 139:         )
+ 140:         charts["rsi"] = json.loads(rsi_fig.to_json())
+ 141: 
+ 142:     # MACD
+ 143:     if set(["macd", "macd_signal", "macd_hist"]).issubset(set(feat_df.columns)):
+ 144:         macd_fig = go.Figure(
+ 145:             data=[
+ 146:                 go.Scatter(x=idx, y=feat_df["macd"], name="MACD", mode="lines"),
+ 147:                 go.Scatter(x=idx, y=feat_df["macd_signal"], name="Signal", mode="lines"),
+ 148:                 go.Bar(x=idx, y=feat_df["macd_hist"], name="Hist"),
+ 149:             ],
+ 150:             layout=go.Layout(title="MACD"),
+ 151:         )
+ 152:         charts["macd"] = json.loads(macd_fig.to_json())
+ 153: 
+ 154:     return charts
+ 155: 
+ 156: 
+ 157: if __name__ == "__main__":
+ 158:     app = create_app()
+ 159:     # Run with: python app.py (then open http://127.0.0.1:5000)
+ 160:     app.run(debug=True)
