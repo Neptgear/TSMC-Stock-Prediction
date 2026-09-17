@@ -2,6 +2,7 @@ import os
 import json
 import io
 import datetime as dt
+import time
 from typing import Optional, Tuple, List, Dict
 
 import numpy as np
@@ -90,53 +91,64 @@ def get_ohlcv(
     def _fetch_yf() -> Optional[pd.DataFrame]:
         if yf is None:
             return None
-        try:
-            # yfinance treats 'end' as exclusive. Make UI/API 'end' inclusive by adding one day.
-            end_param = end
+        for attempt in range(3):
             try:
-                if end is not None:
-                    end_dt = pd.to_datetime(end)
-                    end_param = (end_dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-            except Exception:
+                # yfinance treats 'end' as exclusive. Make UI/API 'end'
+                # inclusive by adding one day.
                 end_param = end
-            df = yf.download(
-                ticker_yt,
-                start=start,
-                end=end_param,
-                auto_adjust=auto_adjust,
-                group_by="column",
-                progress=False,
-            )
-            # Flatten possible MultiIndex columns (yfinance may return them)
-            if isinstance(df.columns, pd.MultiIndex):
-                # yfinance has used both (field, ticker) and (ticker, field).
-                # Select the level that actually contains OHLCV labels instead
-                # of assuming a fixed level order.
-                expected = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
-                scores = []
-                for level in range(df.columns.nlevels):
-                    labels = {str(value) for value in df.columns.get_level_values(level)}
-                    scores.append((len(labels & expected), level))
-                best_score, best_level = max(scores)
-                if best_score:
-                    df.columns = df.columns.get_level_values(best_level)
-                else:
-                    df.columns = ["_".join([str(x) for x in tup if str(x) != ""]).strip("_") for tup in df.columns]
-            # Normalize column title case for consistency
-            df = df.rename(columns={
-                "open": "Open",
-                "high": "High",
-                "low": "Low",
-                "close": "Close",
-                "adj close": "Adj Close",
-                "volume": "Volume",
-            })
-            # Ensure a Close column exists (fallback to Adj Close if necessary)
-            if "Close" not in df.columns and "Adj Close" in df.columns:
-                df["Close"] = df["Adj Close"]
-            return df
-        except Exception:
-            return None
+                try:
+                    if end is not None:
+                        end_dt = pd.to_datetime(end)
+                        end_param = (end_dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                except Exception:
+                    end_param = end
+                df = yf.download(
+                    ticker_yt,
+                    start=start,
+                    end=end_param,
+                    auto_adjust=auto_adjust,
+                    group_by="column",
+                    progress=False,
+                    timeout=30,
+                )
+                if df is None or df.empty:
+                    if attempt < 2:
+                        time.sleep(1 + attempt)
+                        continue
+                    return None
+                # Flatten possible MultiIndex columns (yfinance may return them)
+                if isinstance(df.columns, pd.MultiIndex):
+                    # yfinance has used both (field, ticker) and (ticker, field).
+                    # Select the level that actually contains OHLCV labels.
+                    expected = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+                    scores = []
+                    for level in range(df.columns.nlevels):
+                        labels = {str(value) for value in df.columns.get_level_values(level)}
+                        scores.append((len(labels & expected), level))
+                    best_score, best_level = max(scores)
+                    if best_score:
+                        df.columns = df.columns.get_level_values(best_level)
+                    else:
+                        df.columns = ["_".join([str(x) for x in tup if str(x) != ""]).strip("_") for tup in df.columns]
+                # Normalize column title case for consistency
+                df = df.rename(columns={
+                    "open": "Open",
+                    "high": "High",
+                    "low": "Low",
+                    "close": "Close",
+                    "adj close": "Adj Close",
+                    "volume": "Volume",
+                })
+                # Ensure a Close column exists (fallback to Adj Close if necessary)
+                if "Close" not in df.columns and "Adj Close" in df.columns:
+                    df["Close"] = df["Adj Close"]
+                return df
+            except Exception:
+                if attempt < 2:
+                    time.sleep(1 + attempt)
+                    continue
+                return None
+        return None
 
     # Primary: Yahoo Finance
     df_yf = _fetch_yf() if (provider is None or provider.lower() == "yahoo") else None
