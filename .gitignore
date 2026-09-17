@@ -1,3 +1,16 @@
 # Ignore local secrets and env files
 secrets_local.py
 .env
+
+# Python environments and generated caches
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.yf-cache/
+
+# Local reports and runtime artifacts
+artifacts/
+audit.json
+

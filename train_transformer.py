@@ -458,6 +458,9 @@ class TrainConfig:
     # Walk-forward evaluation controls
     walkforward_splits: int = 0  # number of additional chronological folds for overfit checks (0 disables)
     walkforward_epochs: Optional[int] = None  # optional override for epochs per walk-forward fold
+    # Optional post-evaluation refit on every labeled sample available by the
+    # cutoff. Historical metrics are computed before this refit.
+    forecast_refit_epochs: int = 0
 
 
 def suggest_window(h: int, min_w: int = 30, max_w: int = 504) -> int:
@@ -508,6 +511,90 @@ def standardize_ohlcv_columns(df_in):
     return df_local
 
 
+def _future_business_dates(last_observed, horizon: int) -> pd.DatetimeIndex:
+    """Return forecast dates without consulting any future price observations."""
+    start = pd.Timestamp(last_observed) + pd.tseries.offsets.BDay(1)
+    return pd.bdate_range(start=start, periods=int(max(1, horizon)))
+
+
+def _future_known_matrix(dates: Sequence, columns: Sequence[str]) -> np.ndarray:
+    """Build calendar-only decoder inputs for an as-of forecast."""
+    rows = []
+    for value in dates:
+        date = pd.Timestamp(value)
+        next_business = date + pd.tseries.offsets.BDay(1)
+        mapping = {
+            "year": float(date.year),
+            "month": float(date.month),
+            "day_of_week": float(date.dayofweek),
+            "is_month_end": float(date.is_month_end),
+            "is_quarter_end": float(date.is_quarter_end),
+            "is_holiday_eve": float((next_business - date).days > 1),
+        }
+        rows.append([mapping.get(str(column), 0.0) for column in columns])
+    return np.asarray(rows, dtype=np.float32).reshape(len(rows), len(columns))
+
+
+def _refit_sequence_model_for_forecast(
+    model: nn.Module,
+    dataset: Dataset,
+    cfg: TrainConfig,
+    loss_fn,
+) -> None:
+    """Continue fitting on all cutoff-available labels after evaluation."""
+    epochs = int(max(0, getattr(cfg, "forecast_refit_epochs", 0)))
+    if epochs == 0:
+        return
+    loader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=False)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=max(float(cfg.lr) * 0.5, 1e-6),
+        weight_decay=cfg.weight_decay,
+    )
+    for _ in range(epochs):
+        model.train()
+        for enc_b, dec_k, dec_s, stc, yb in loader:
+            enc_b = enc_b.to(cfg.device)
+            dec_k = dec_k.to(cfg.device)
+            dec_s = dec_s.to(cfg.device)
+            stc = stc.to(cfg.device)
+            yb = yb.to(cfg.device)
+            optimizer.zero_grad()
+            prediction = model(enc_b, dec_k, dec_s, stc)
+            loss = loss_fn(prediction, yb)
+            loss.backward()
+            if cfg.clip_grad_norm and cfg.clip_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.clip_grad_norm)
+            optimizer.step()
+
+
+def _full_history_refit_dataset(
+    enc_obs: np.ndarray,
+    dec_known: np.ndarray,
+    dec_start: np.ndarray,
+    static_vecs: np.ndarray,
+    y_all: np.ndarray,
+    base_last: np.ndarray,
+    obs_scaler: SequenceStandardScaler,
+    known_scaler: Optional[SequenceStandardScaler],
+    static_scaler: Optional[VectorStandardScaler],
+    y_mean: float,
+    y_std: float,
+    residualize: bool,
+) -> Seq2SeqDataset:
+    enc_full = obs_scaler.transform(enc_obs)
+    known_full = known_scaler.transform(dec_known) if known_scaler is not None else dec_known.copy()
+    static_full = static_scaler.transform(static_vecs) if static_scaler is not None else static_vecs.copy()
+    dec_full = dec_start.copy()
+    y_full = y_all.copy()
+    if residualize:
+        y_full = y_full - base_last[:, None]
+        dec_full[:, 1:, :] = dec_full[:, 1:, :] - base_last[:, None, None]
+    y_full = (y_full - y_mean) / y_std
+    dec_full = (dec_full - y_mean) / y_std
+    return Seq2SeqDataset(enc_full, known_full, dec_full, static_full, y_full)
+
+
 def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     """Full seq2seq transformer training with observed/known/static splits and causal decoding."""
     seed_everything(42)
@@ -515,7 +602,15 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     data_quality_report = dict(df.attrs.get("data_quality", {}))
     df = standardize_ohlcv_columns(df)
     events_df = get_event_countdowns(cfg.ticker, df.index)
-    feat_df = compute_features(df, target=cfg.target, horizon=cfg.horizon, include_extra=True, events_df=events_df)
+    # Keep every observed row. Multi-horizon targets are assembled explicitly
+    # later, avoiding the previous double shift of target dates.
+    feat_df = compute_indicators_only(df, include_extra=True, events_df=events_df)
+    if cfg.target == "next_close":
+        feat_df["target"] = feat_df["Close"]
+    elif cfg.target in ("next_return_pct", "next_ret_pct"):
+        feat_df["target"] = feat_df["Close"].pct_change()
+    else:
+        raise ValueError("target must be 'next_close' or 'next_return_pct'")
 
     # Feature grouping
     known_future_candidates = {"year", "month", "day_of_week", "is_month_end", "is_quarter_end", "is_holiday_eve"}
@@ -576,35 +671,47 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     if split_idx <= 0 or split_idx >= num_samples:
         raise RuntimeError(f"Split produced empty train/test. samples={num_samples}, split_idx={split_idx}, min_test={min_test}, split_rule={split_rule}")
 
-    enc_train, enc_test = enc_obs[:split_idx], enc_obs[split_idx:]
-    dec_known_train, dec_known_test = dec_known[:split_idx], dec_known[split_idx:]
-    dec_start_train, dec_start_test = dec_start[:split_idx], dec_start[split_idx:]
-    static_train, static_test = static_vecs[:split_idx], static_vecs[split_idx:]
-    y_train_full, y_test_full = y_all[:split_idx], y_all[split_idx:]
-    base_train, base_test = base_last[:split_idx], base_last[split_idx:]
-    anchor_train, anchor_test = anchor_dates[:split_idx], anchor_dates[split_idx:]
-    target_dates_test = target_dates[split_idx:]
+    # Purge H-1 boundary samples so multi-day label windows do not overlap
+    # between train and test partitions.
+    purge_gap = max(0, int(cfg.horizon) - 1)
+    train_pool_end = split_idx - purge_gap
+    if train_pool_end < 2:
+        raise RuntimeError("Not enough training samples after multi-horizon purge gap.")
+    enc_train, enc_test = enc_obs[:train_pool_end], enc_obs[split_idx:]
+    dec_known_train, dec_known_test = dec_known[:train_pool_end], dec_known[split_idx:]
+    dec_start_train, dec_start_test = dec_start[:train_pool_end], dec_start[split_idx:]
+    static_train, static_test = static_vecs[:train_pool_end], static_vecs[split_idx:]
+    y_train_full, y_test_full = y_all[:train_pool_end], y_all[split_idx:]
+    base_train, base_test = base_last[:train_pool_end], base_last[split_idx:]
+    anchor_train, anchor_test = anchor_dates[:train_pool_end], anchor_dates[split_idx:]
+    target_dates_train, target_dates_test = target_dates[:train_pool_end], target_dates[split_idx:]
 
     val_ratio = float(max(0.0, min(1.0, getattr(cfg, "val_ratio", 0.1))))
     val_count = int(round(len(enc_train) * val_ratio)) if val_ratio > 0 else 0
     if val_count >= len(enc_train):
         val_count = max(0, len(enc_train) - 1)
     if val_count > 0:
-        enc_val = enc_train[-val_count:]
-        dec_known_val = dec_known_train[-val_count:]
-        dec_start_val = dec_start_train[-val_count:]
-        static_val = static_train[-val_count:]
-        y_val_full = y_train_full[-val_count:]
-        base_val = base_train[-val_count:]
-        anchor_val = anchor_train[-val_count:]
+        val_start = len(enc_train) - val_count
+        train_keep_end = val_start - purge_gap
+        if train_keep_end < 1:
+            raise RuntimeError("Not enough training samples after validation purge gap.")
+        enc_val = enc_train[val_start:]
+        dec_known_val = dec_known_train[val_start:]
+        dec_start_val = dec_start_train[val_start:]
+        static_val = static_train[val_start:]
+        y_val_full = y_train_full[val_start:]
+        base_val = base_train[val_start:]
+        anchor_val = anchor_train[val_start:]
+        target_dates_val = target_dates_train[val_start:]
 
-        enc_train = enc_train[:-val_count]
-        dec_known_train = dec_known_train[:-val_count]
-        dec_start_train = dec_start_train[:-val_count]
-        static_train = static_train[:-val_count]
-        y_train_full = y_train_full[:-val_count]
-        base_train = base_train[:-val_count]
-        anchor_train = anchor_train[:-val_count]
+        enc_train = enc_train[:train_keep_end]
+        dec_known_train = dec_known_train[:train_keep_end]
+        dec_start_train = dec_start_train[:train_keep_end]
+        static_train = static_train[:train_keep_end]
+        y_train_full = y_train_full[:train_keep_end]
+        base_train = base_train[:train_keep_end]
+        anchor_train = anchor_train[:train_keep_end]
+        target_dates_train = target_dates_train[:train_keep_end]
     else:
         enc_val = enc_test
         dec_known_val = dec_known_test
@@ -613,6 +720,7 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
         y_val_full = y_test_full
         base_val = base_test
         anchor_val = []
+        target_dates_val = []
 
     # Fit all input scalers on the final training partition only. Validation,
     # test and future inputs must never influence preprocessing statistics.
@@ -639,22 +747,22 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     if cfg.target == "next_close" and cfg.residualize:
         y_train_full = y_train_full - base_train[:, None]
         y_test_full = y_test_full - base_test[:, None]
-        dec_start_train = dec_start_train - base_train[:, None, None]
-        dec_start_test = dec_start_test - base_test[:, None, None]
+        dec_start_train[:, 1:, :] = dec_start_train[:, 1:, :] - base_train[:, None, None]
+        dec_start_test[:, 1:, :] = dec_start_test[:, 1:, :] - base_test[:, None, None]
         if val_count > 0 or (isinstance(y_val_full, np.ndarray) and y_val_full.size):
             y_val_full = y_val_full - base_val[:, None]
-            dec_start_val = dec_start_val - base_val[:, None, None]
+            dec_start_val[:, 1:, :] = dec_start_val[:, 1:, :] - base_val[:, None, None]
 
     # Target scaling (learn mean/std on train residual targets for stability)
     y_mean = float(y_train_full.mean())
     y_std = float(y_train_full.std() if y_train_full.std() != 0 else 1.0)
     y_train_scaled = (y_train_full - y_mean) / y_std
     y_test_scaled = (y_test_full - y_mean) / y_std
-    dec_start_train_scaled = dec_start_train / y_std
-    dec_start_test_scaled = dec_start_test / y_std
+    dec_start_train_scaled = (dec_start_train - y_mean) / y_std
+    dec_start_test_scaled = (dec_start_test - y_mean) / y_std
     if val_count > 0 or (isinstance(y_val_full, np.ndarray) and y_val_full.size):
         y_val_scaled = (y_val_full - y_mean) / y_std
-        dec_start_val_scaled = dec_start_val / y_std
+        dec_start_val_scaled = (dec_start_val - y_mean) / y_std
     else:
         y_val_scaled = y_test_scaled
         dec_start_val_scaled = dec_start_test_scaled
@@ -688,8 +796,6 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     no_improve = 0
     train_losses: list[float] = []
     val_losses: list[float] = []
-    train_losses: list[float] = []
-    val_losses: list[float] = []
     for epoch in range(1, cfg.epochs + 1):
         model.train()
         train_loss = 0.0
@@ -709,7 +815,6 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
             opt.step()
             train_loss += loss.item() * enc_b.size(0)
         train_loss /= len(train_loader.dataset)
-        train_losses.append(float(train_loss))
         train_losses.append(float(train_loss))
 
         model.eval()
@@ -888,38 +993,67 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
         except Exception:
             return str(val)
     test_dates_str = [_to_date_str(d) for d in target_dates_test]
-    val_dates = [_to_date_str(d) for d in anchor_val] if anchor_val is not None else []
+    val_dates = [_to_date_str(d) for d in target_dates_val]
     split_meta = {
         "train_count": int(len(anchor_train)),
         "val_count": int(len(val_dates)),
         "test_count": int(len(anchor_test)),
-        "train_start": _to_date_str(anchor_train[0]) if anchor_train else None,
-        "train_end": _to_date_str(anchor_train[-1]) if anchor_train else None,
+        "train_start": _to_date_str(target_dates_train[0]) if target_dates_train else None,
+        "train_end": _to_date_str(target_dates_train[-1]) if target_dates_train else None,
         "val_start": val_dates[0] if val_dates else None,
         "val_end": val_dates[-1] if val_dates else None,
-        "test_start": _to_date_str(anchor_test[0]) if anchor_test else None,
-        "test_end": _to_date_str(anchor_test[-1]) if anchor_test else None,
+        "test_start": _to_date_str(target_dates_test[0]) if target_dates_test else None,
+        "test_end": _to_date_str(target_dates_test[-1]) if target_dates_test else None,
+        "train_anchor_start": _to_date_str(anchor_train[0]) if anchor_train else None,
+        "train_anchor_end": _to_date_str(anchor_train[-1]) if anchor_train else None,
+        "test_anchor_start": _to_date_str(anchor_test[0]) if anchor_test else None,
+        "test_anchor_end": _to_date_str(anchor_test[-1]) if anchor_test else None,
+        "purge_gap_samples": int(purge_gap),
         "cutoff": _to_date_str(cfg.split_date) if cfg.split_date else None,
         "split_rule": split_rule,
         "requested_split_mode": cfg.split_mode,
         "requested_train_ratio": float(cfg.train_ratio),
         "effective_train_ratio": float(split_idx / num_samples),
-        "separation_ok": bool(len(anchor_train) == 0 or len(anchor_test) == 0 or anchor_train[-1] <= anchor_test[0]),
+        "separation_ok": bool(not target_dates_train or not target_dates_test or target_dates_train[-1] < target_dates_test[0]),
         "data_quality": data_quality_report,
     }
 
+    if cfg.forecast_refit_epochs > 0:
+        refit_dataset = _full_history_refit_dataset(
+            enc_obs,
+            dec_known,
+            dec_start,
+            static_vecs,
+            y_all,
+            base_last,
+            obs_scaler,
+            known_scaler,
+            static_scaler,
+            y_mean,
+            y_std,
+            bool(cfg.target == "next_close" and cfg.residualize),
+        )
+        _refit_sequence_model_for_forecast(model, refit_dataset, cfg, criterion)
+        split_meta["forecast_refit_samples"] = int(len(refit_dataset))
+        split_meta["forecast_refit_epochs"] = int(cfg.forecast_refit_epochs)
+
     # Lightweight future forecast using the latest available window
     future_point = None
+    future_sequence = None
     actual_target = None
     future_point_error = None
     try:
         model.eval()
-        enc_future = obs_scaler.transform(enc_obs[-1:])
-        dec_known_future = dec_known[-1:] if dec_known.shape[1] else np.zeros((1, cfg.horizon, 0), dtype=np.float32)
+        future_dates = _future_business_dates(df.index[-1], cfg.horizon)
+        enc_future_raw = feat_df[observed_cols].iloc[-cfg.window_size:].values.astype(np.float32)[None, ...]
+        if enc_future_raw.shape[1] != cfg.window_size:
+            raise RuntimeError("Not enough latest feature rows for an as-of forecast window.")
+        enc_future = obs_scaler.transform(enc_future_raw)
+        dec_known_future = _future_known_matrix(future_dates, known_future_cols)[None, ...]
         if known_scaler is not None:
             dec_known_future = known_scaler.transform(dec_known_future)
-        dec_start_future = np.zeros_like(dec_start[-1:])
-        static_future = static_vecs[-1:] if static_vecs.shape[1] else np.zeros((1, 0), dtype=np.float32)
+        dec_start_future = np.full((1, cfg.horizon, 1), (0.0 - y_mean) / y_std, dtype=np.float32)
+        static_future = feat_df[static_cols].iloc[-1:].values.astype(np.float32) if static_cols else np.zeros((1, 0), dtype=np.float32)
         if static_scaler is not None:
             static_future = static_scaler.transform(static_future)
         with torch.no_grad():
@@ -929,42 +1063,20 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
                 torch.from_numpy(dec_start_future).to(cfg.device),
                 torch.from_numpy(static_future).to(cfg.device),
             )
-        y_future_scaled = float(pred_future.detach().cpu().numpy().reshape(1, -1)[0, -1])
-        y_future_eff = (y_future_scaled * y_std) + y_mean
+        y_future_scaled_seq = pred_future.detach().cpu().numpy().reshape(1, -1)[0]
+        y_future_seq = (y_future_scaled_seq * y_std) + y_mean
         if cfg.target == "next_close" and cfg.residualize:
-            y_future_eff = y_future_eff + float(base_last[-1])
+            y_future_seq = y_future_seq + float(df["Close"].iloc[-1])
 
-        last_date = df.index[-1]
-        future_date = last_date + _pd.tseries.offsets.BDay(cfg.horizon)
-        try:
-            df_after = get_ohlcv(
-                ticker_yt=cfg.ticker,
-                start=str(getattr(last_date, "date", lambda: last_date)()),
-                end=None,
-                auto_adjust=True,
-            )
-            df_after = standardize_ohlcv_columns(df_after)
-            next_trading = df_after.index[df_after.index > last_date]
-            if len(next_trading) >= cfg.horizon:
-                future_date = next_trading[cfg.horizon - 1]
-            elif len(next_trading) > 0:
-                future_date = next_trading[-1] + _pd.tseries.offsets.BDay(cfg.horizon - len(next_trading))
-        except Exception:
-            pass
+        future_sequence = [
+            {"date": str(pd.Timestamp(date).date()), "value": float(value)}
+            for date, value in zip(future_dates, y_future_seq)
+        ]
 
         future_point = {
-            "date": str(getattr(future_date, "date", lambda: future_date)()),
-            "value": float(y_future_eff),
+            "date": future_sequence[-1]["date"],
+            "value": future_sequence[-1]["value"],
         }
-
-        try:
-            tgt_str = str(getattr(future_date, "date", lambda: future_date)())
-            df_target = get_ohlcv(ticker_yt=cfg.ticker, start=cfg.start, end=tgt_str, auto_adjust=True)
-            df_target = standardize_ohlcv_columns(df_target)
-            if future_date in df_target.index:
-                actual_target = {"date": tgt_str, "value": float(df_target["Close"].loc[future_date])}
-        except Exception:
-            actual_target = None
     except Exception as ex:
         future_point_error = f"{type(ex).__name__}: {ex}"
 
@@ -986,6 +1098,7 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
         "residualized": False,
         "residual_base": "Close",
         "future_point": future_point,
+        "future_sequence": future_sequence,
         "actual_target": actual_target,
         "future_point_error": future_point_error,
         "effective_window": int(cfg.window_size),
@@ -1005,7 +1118,13 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     data_quality_report = dict(df.attrs.get("data_quality", {}))
     df = standardize_ohlcv_columns(df)
     events_df = get_event_countdowns(cfg.ticker, df.index)
-    feat_df = compute_features(df, target=cfg.target, horizon=cfg.horizon, include_extra=True, events_df=events_df)
+    feat_df = compute_indicators_only(df, include_extra=True, events_df=events_df)
+    if cfg.target == "next_close":
+        feat_df["target"] = feat_df["Close"]
+    elif cfg.target in ("next_return_pct", "next_ret_pct"):
+        feat_df["target"] = feat_df["Close"].pct_change()
+    else:
+        raise ValueError("target must be 'next_close' or 'next_return_pct'")
 
     known_future_candidates = {"year", "month", "day_of_week", "is_month_end", "is_quarter_end", "is_holiday_eve"}
     known_future_cols = [c for c in feat_df.columns if c in known_future_candidates or (isinstance(c, str) and c.startswith("f_days_"))]
@@ -1059,35 +1178,45 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     if split_idx <= 0 or split_idx >= num_samples:
         raise RuntimeError(f"Split produced empty train/test. samples={num_samples}, split_idx={split_idx}, min_test={min_test}, split_rule={split_rule}")
 
-    enc_train, enc_test = enc_obs[:split_idx], enc_obs[split_idx:]
-    dec_known_train, dec_known_test = dec_known[:split_idx], dec_known[split_idx:]
-    dec_start_train, dec_start_test = dec_start[:split_idx], dec_start[split_idx:]
-    static_train, static_test = static_vecs[:split_idx], static_vecs[split_idx:]
-    y_train_full, y_test_full = y_all[:split_idx], y_all[split_idx:]
-    base_train, base_test = base_last[:split_idx], base_last[split_idx:]
-    anchor_train, anchor_test = anchor_dates[:split_idx], anchor_dates[split_idx:]
-    target_dates_test = target_dates[split_idx:]
+    purge_gap = max(0, int(cfg.horizon) - 1)
+    train_pool_end = split_idx - purge_gap
+    if train_pool_end < 2:
+        raise RuntimeError("Not enough training samples after multi-horizon purge gap.")
+    enc_train, enc_test = enc_obs[:train_pool_end], enc_obs[split_idx:]
+    dec_known_train, dec_known_test = dec_known[:train_pool_end], dec_known[split_idx:]
+    dec_start_train, dec_start_test = dec_start[:train_pool_end], dec_start[split_idx:]
+    static_train, static_test = static_vecs[:train_pool_end], static_vecs[split_idx:]
+    y_train_full, y_test_full = y_all[:train_pool_end], y_all[split_idx:]
+    base_train, base_test = base_last[:train_pool_end], base_last[split_idx:]
+    anchor_train, anchor_test = anchor_dates[:train_pool_end], anchor_dates[split_idx:]
+    target_dates_train, target_dates_test = target_dates[:train_pool_end], target_dates[split_idx:]
 
     val_ratio = float(max(0.0, min(1.0, getattr(cfg, "val_ratio", 0.1))))
     val_count = int(round(len(enc_train) * val_ratio)) if val_ratio > 0 else 0
     if val_count >= len(enc_train):
         val_count = max(0, len(enc_train) - 1)
     if val_count > 0:
-        enc_val = enc_train[-val_count:]
-        dec_known_val = dec_known_train[-val_count:]
-        dec_start_val = dec_start_train[-val_count:]
-        static_val = static_train[-val_count:]
-        y_val_full = y_train_full[-val_count:]
-        base_val = base_train[-val_count:]
-        anchor_val = anchor_train[-val_count:]
+        val_start = len(enc_train) - val_count
+        train_keep_end = val_start - purge_gap
+        if train_keep_end < 1:
+            raise RuntimeError("Not enough training samples after validation purge gap.")
+        enc_val = enc_train[val_start:]
+        dec_known_val = dec_known_train[val_start:]
+        dec_start_val = dec_start_train[val_start:]
+        static_val = static_train[val_start:]
+        y_val_full = y_train_full[val_start:]
+        base_val = base_train[val_start:]
+        anchor_val = anchor_train[val_start:]
+        target_dates_val = target_dates_train[val_start:]
 
-        enc_train = enc_train[:-val_count]
-        dec_known_train = dec_known_train[:-val_count]
-        dec_start_train = dec_start_train[:-val_count]
-        static_train = static_train[:-val_count]
-        y_train_full = y_train_full[:-val_count]
-        base_train = base_train[:-val_count]
-        anchor_train = anchor_train[:-val_count]
+        enc_train = enc_train[:train_keep_end]
+        dec_known_train = dec_known_train[:train_keep_end]
+        dec_start_train = dec_start_train[:train_keep_end]
+        static_train = static_train[:train_keep_end]
+        y_train_full = y_train_full[:train_keep_end]
+        base_train = base_train[:train_keep_end]
+        anchor_train = anchor_train[:train_keep_end]
+        target_dates_train = target_dates_train[:train_keep_end]
     else:
         enc_val = enc_test
         dec_known_val = dec_known_test
@@ -1096,6 +1225,7 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
         y_val_full = y_test_full
         base_val = base_test
         anchor_val = []
+        target_dates_val = []
 
     # Fit input preprocessing on training data only to avoid look-ahead leakage.
     obs_scaler = SequenceStandardScaler().fit(enc_train)
@@ -1121,22 +1251,22 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     if cfg.target == "next_close" and cfg.residualize:
         y_train_full = y_train_full - base_train[:, None]
         y_test_full = y_test_full - base_test[:, None]
-        dec_start_train = dec_start_train - base_train[:, None, None]
-        dec_start_test = dec_start_test - base_test[:, None, None]
+        dec_start_train[:, 1:, :] = dec_start_train[:, 1:, :] - base_train[:, None, None]
+        dec_start_test[:, 1:, :] = dec_start_test[:, 1:, :] - base_test[:, None, None]
         if val_count > 0 or (isinstance(y_val_full, np.ndarray) and y_val_full.size):
             y_val_full = y_val_full - base_val[:, None]
-            dec_start_val = dec_start_val - base_val[:, None, None]
+            dec_start_val[:, 1:, :] = dec_start_val[:, 1:, :] - base_val[:, None, None]
 
     # Target scaling for TFT
     y_mean = float(y_train_full.mean())
     y_std = float(y_train_full.std() if y_train_full.std() != 0 else 1.0)
     y_train_scaled = (y_train_full - y_mean) / y_std
     y_test_scaled = (y_test_full - y_mean) / y_std
-    dec_start_train_scaled = dec_start_train / y_std
-    dec_start_test_scaled = dec_start_test / y_std
+    dec_start_train_scaled = (dec_start_train - y_mean) / y_std
+    dec_start_test_scaled = (dec_start_test - y_mean) / y_std
     if val_count > 0 or (isinstance(y_val_full, np.ndarray) and y_val_full.size):
         y_val_scaled = (y_val_full - y_mean) / y_std
-        dec_start_val_scaled = dec_start_val / y_std
+        dec_start_val_scaled = (dec_start_val - y_mean) / y_std
     else:
         y_val_scaled = y_test_scaled
         dec_start_val_scaled = dec_start_test_scaled
@@ -1365,15 +1495,20 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     )
 
     future_point = None
+    future_sequence = None
     actual_target = None
     try:
         model.eval()
-        enc_future = obs_scaler.transform(enc_obs[-1:])
-        dec_known_future = dec_known[-1:] if dec_known.shape[1] else np.zeros((1, cfg.horizon, 0), dtype=np.float32)
+        future_dates = _future_business_dates(df.index[-1], cfg.horizon)
+        enc_future_raw = feat_df[observed_cols].iloc[-cfg.window_size:].values.astype(np.float32)[None, ...]
+        if enc_future_raw.shape[1] != cfg.window_size:
+            raise RuntimeError("Not enough latest feature rows for an as-of forecast window.")
+        enc_future = obs_scaler.transform(enc_future_raw)
+        dec_known_future = _future_known_matrix(future_dates, known_future_cols)[None, ...]
         if known_scaler is not None:
             dec_known_future = known_scaler.transform(dec_known_future)
-        dec_start_future = np.zeros_like(dec_start[-1:])
-        static_future = static_vecs[-1:] if static_vecs.shape[1] else np.zeros((1, 0), dtype=np.float32)
+        dec_start_future = np.full((1, cfg.horizon, 1), (0.0 - y_mean) / y_std, dtype=np.float32)
+        static_future = feat_df[static_cols].iloc[-1:].values.astype(np.float32) if static_cols else np.zeros((1, 0), dtype=np.float32)
         if static_scaler is not None:
             static_future = static_scaler.transform(static_future)
         with torch.no_grad():
@@ -1384,42 +1519,20 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
                 torch.from_numpy(static_future).to(cfg.device),
             )  # (1, H, Q)
         pred_future_med = pred_future_full[..., med_idx].detach().cpu().numpy()
-        y_future_scaled = float(pred_future_med.reshape(1, -1)[0, -1])
-        y_future_eff = (y_future_scaled * y_std) + y_mean
+        y_future_scaled_seq = pred_future_med.reshape(1, -1)[0]
+        y_future_seq = (y_future_scaled_seq * y_std) + y_mean
         if cfg.target == "next_close" and cfg.residualize:
-            y_future_eff = y_future_eff + float(base_last[-1])
+            y_future_seq = y_future_seq + float(df["Close"].iloc[-1])
 
-        last_date = df.index[-1]
-        future_date = last_date + _pd.tseries.offsets.BDay(cfg.horizon)
-        try:
-            df_after = get_ohlcv(
-                ticker_yt=cfg.ticker,
-                start=str(getattr(last_date, "date", lambda: last_date)()),
-                end=None,
-                auto_adjust=True,
-            )
-            df_after = standardize_ohlcv_columns(df_after)
-            next_trading = df_after.index[df_after.index > last_date]
-            if len(next_trading) >= cfg.horizon:
-                future_date = next_trading[cfg.horizon - 1]
-            elif len(next_trading) > 0:
-                future_date = next_trading[-1] + _pd.tseries.offsets.BDay(cfg.horizon - len(next_trading))
-        except Exception:
-            pass
+        future_sequence = [
+            {"date": str(pd.Timestamp(date).date()), "value": float(value)}
+            for date, value in zip(future_dates, y_future_seq)
+        ]
 
         future_point = {
-            "date": str(getattr(future_date, "date", lambda: future_date)()),
-            "value": float(y_future_eff),
+            "date": future_sequence[-1]["date"],
+            "value": future_sequence[-1]["value"],
         }
-
-        try:
-            tgt_str = str(getattr(future_date, "date", lambda: future_date)())
-            df_target = get_ohlcv(ticker_yt=cfg.ticker, start=cfg.start, end=tgt_str, auto_adjust=True)
-            df_target = standardize_ohlcv_columns(df_target)
-            if future_date in df_target.index:
-                actual_target = {"date": tgt_str, "value": float(df_target["Close"].loc[future_date])}
-        except Exception:
-            actual_target = None
     except Exception as ex:
         future_point_error = f"{type(ex).__name__}: {ex}"
 
@@ -1429,25 +1542,54 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
         except Exception:
             return str(val)
     test_dates_str = [_to_date_str(d) for d in target_dates_test]
-    val_dates = [_to_date_str(d) for d in anchor_val] if anchor_val is not None else []
+    val_dates = [_to_date_str(d) for d in target_dates_val]
     split_meta = {
         "train_count": int(len(anchor_train)),
         "val_count": int(len(val_dates)),
         "test_count": int(len(anchor_test)),
-        "train_start": _to_date_str(anchor_train[0]) if anchor_train else None,
-        "train_end": _to_date_str(anchor_train[-1]) if anchor_train else None,
+        "train_start": _to_date_str(target_dates_train[0]) if target_dates_train else None,
+        "train_end": _to_date_str(target_dates_train[-1]) if target_dates_train else None,
         "val_start": val_dates[0] if val_dates else None,
         "val_end": val_dates[-1] if val_dates else None,
-        "test_start": _to_date_str(anchor_test[0]) if anchor_test else None,
-        "test_end": _to_date_str(anchor_test[-1]) if anchor_test else None,
+        "test_start": _to_date_str(target_dates_test[0]) if target_dates_test else None,
+        "test_end": _to_date_str(target_dates_test[-1]) if target_dates_test else None,
+        "train_anchor_start": _to_date_str(anchor_train[0]) if anchor_train else None,
+        "train_anchor_end": _to_date_str(anchor_train[-1]) if anchor_train else None,
+        "test_anchor_start": _to_date_str(anchor_test[0]) if anchor_test else None,
+        "test_anchor_end": _to_date_str(anchor_test[-1]) if anchor_test else None,
+        "purge_gap_samples": int(purge_gap),
         "cutoff": _to_date_str(cfg.split_date) if cfg.split_date else None,
         "split_rule": split_rule,
         "requested_split_mode": cfg.split_mode,
         "requested_train_ratio": float(cfg.train_ratio),
         "effective_train_ratio": float(split_idx / num_samples),
-        "separation_ok": bool(len(anchor_train) == 0 or len(anchor_test) == 0 or anchor_train[-1] <= anchor_test[0]),
+        "separation_ok": bool(not target_dates_train or not target_dates_test or target_dates_train[-1] < target_dates_test[0]),
         "data_quality": data_quality_report,
     }
+
+    if cfg.forecast_refit_epochs > 0:
+        refit_dataset = _full_history_refit_dataset(
+            enc_obs,
+            dec_known,
+            dec_start,
+            static_vecs,
+            y_all,
+            base_last,
+            obs_scaler,
+            known_scaler,
+            static_scaler,
+            y_mean,
+            y_std,
+            bool(cfg.target == "next_close" and cfg.residualize),
+        )
+        _refit_sequence_model_for_forecast(
+            model,
+            refit_dataset,
+            cfg,
+            lambda prediction, target: quantile_loss(prediction, target, model.quantiles),
+        )
+        split_meta["forecast_refit_samples"] = int(len(refit_dataset))
+        split_meta["forecast_refit_epochs"] = int(cfg.forecast_refit_epochs)
 
     return {
         "run_dir": None,
@@ -1468,6 +1610,7 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
         "residualized": False,
         "residual_base": "Close",
         "future_point": future_point,
+        "future_sequence": future_sequence,
         "future_point_error": future_point_error,
         "actual_target": actual_target,
         "effective_window": int(cfg.window_size),
@@ -2842,5 +2985,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

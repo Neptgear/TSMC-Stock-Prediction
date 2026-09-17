@@ -18,6 +18,10 @@ class TrainingPreprocessingTests(unittest.TestCase):
             _function_body("run_training_tft_full", "build_seq2seq_tensors"),
         ):
             self.assertNotIn(".bfill(", body)
+            self.assertIn("compute_indicators_only", body)
+            self.assertNotIn("compute_features(df, target=cfg.target", body)
+            self.assertIn("purge_gap = max(0, int(cfg.horizon) - 1)", body)
+            self.assertIn("train_pool_end = split_idx - purge_gap", body)
             split_position = body.index("enc_train, enc_test =")
             fit_position = body.index("SequenceStandardScaler().fit(enc_train)")
             self.assertGreater(fit_position, split_position)

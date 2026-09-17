@@ -55,8 +55,12 @@ def audit_ohlcv(df: pd.DataFrame, *, strict: bool = True) -> Tuple[pd.DataFrame,
     missing_rows = int(clean[list(REQUIRED_OHLCV)].isna().any(axis=1).sum())
 
     positive_price = (clean[["Open", "High", "Low", "Close"]] > 0).all(axis=1)
-    high_envelope = clean["High"] >= clean[["Open", "Low", "Close"]].max(axis=1)
-    low_envelope = clean["Low"] <= clean[["Open", "High", "Close"]].min(axis=1)
+    # Adjusted-price providers can introduce sub-cent floating-point drift, so
+    # use a tiny relative tolerance while still rejecting genuine bad bars.
+    price_scale = clean[["Open", "High", "Low", "Close"]].abs().max(axis=1).clip(lower=1.0)
+    tolerance = price_scale * 1e-6
+    high_envelope = clean["High"] + tolerance >= clean[["Open", "Low", "Close"]].max(axis=1)
+    low_envelope = clean["Low"] - tolerance <= clean[["Open", "High", "Close"]].min(axis=1)
     nonnegative_volume = clean["Volume"] >= 0
     invalid_market_rows = int((~(positive_price & high_envelope & low_envelope & nonnegative_volume)).sum())
 

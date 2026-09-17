@@ -22,7 +22,7 @@
 | 查看預測與診斷 | 圖表及結果區可呈現真實值與預測值、誤差與方向指標、基準比較及學習曲線；可顯示的內容取決於該次結果實際保存的欄位 |
 | 保存與讀取實驗 | `runs/` 保存設定、數值陣列與 JSON；網頁讀取既有結果時使用 `load_run_results`，不會重新訓練或重新推論 |
 
-「程式中有此流程」與「已在新環境實測通過」是不同層級。本說明根據程式與既有實驗檔案整理；資料品質稽核已有自動測試，但模型仍需在目標環境完成一次從零訓練聯測。
+「程式中有此流程」與「已在新環境實測通過」是不同層級。本說明根據程式、既有實驗檔案及 2026-09-17 完成的封存回測整理。資料品質、自動測試與 CPU 訓練流程均已執行；這仍是研究原型，不是投資建議。
 
 ## 系統組成與製作流程
 
@@ -51,6 +51,26 @@ python scripts/audit_saved_run.py runs/<run-id> --output audit.json
 
 稽核會重新計算 MSE、RMSE、MAE，核對預測／真實值／日期數量與日期順序，並比較 `config.json`、`split_info.json` 的切分比例和測試日期。它只證明保存檔案彼此一致，不等於模型具有投資獲利能力。
 
+## 2026-09-11 封存四日回測
+
+這項測試將可見資料鎖定在 2026-09-11（星期五），直接預測 09-14 至 09-17 四個交易日。模型產生預測後才載入四日實際價格評分，因此本週價格不會進入特徵、縮放或模型訓練。歷史評估先使用互不重疊的訓練／驗證／測試標籤；產生未來預測前，再使用截至 09-11 已知的全部 1,252 個監督樣本微調六輪。
+
+模型輸入與誤差使用 Yahoo Finance 調整後收盤價，避免除息造成不連續；表格同時保留交易所原始收盤價。完整參數、逐日數值與限制請見 [`docs/results/asof-backtest-2026-09-11.md`](docs/results/asof-backtest-2026-09-11.md)。
+
+| 方法 | 四日 MAE | 四日 RMSE | 每日方向正確率 | 與最後收盤基準比較 |
+| --- | ---: | ---: | ---: | --- |
+| Transformer | 28.80 | 29.99 | 0% | 價格誤差較差 |
+| TFT-style | 17.81 | 22.25 | 25% | 價格誤差較好，但方向仍弱 |
+| 最後收盤不變基準 | 24.96 | 25.14 | 0% | 基準 |
+
+這四天不能用來宣稱模型有效：TFT-style 在價格 MAE 上勝過簡單基準，但只判對一天方向；Transformer 連價格誤差也沒有勝過基準。正確結論是流程已可核對，但模型效果仍需多期間封存回測、重複種子與更強基準驗證。
+
+重跑命令：
+
+```powershell
+python scripts/asof_backtest.py --cutoff 2026-09-11 --actual-end 2026-09-17 --epochs 12
+```
+
 ## 專案角色與實作能力
 
 依製作者林琨茂的專題說明，本專案由其個人發想與製作，開發過程大量使用 AI 協助程式產生、修改與文件整理。此作品用來呈現需求規劃、資料分析、模型與網頁整合的實作經驗。程式存在與實驗檔案本身不等於每個模組均獨立手寫，也不代表提出新的模型架構。
@@ -59,13 +79,13 @@ python scripts/audit_saved_run.py runs/<run-id> --output audit.json
 
 ## 本機啟動
 
-目前倉庫沒有鎖定版本的依賴清單。以下依程式匯入項目提供環境建立起點，尚非經新環境聯測的安裝保證；PyTorch 版本須配合 Python、作業系統與運算裝置選擇。
+倉庫提供可安裝的 `requirements.txt`；目前使用相容版本範圍而非逐套件雜湊鎖定。PyTorch 仍須配合 Python、作業系統與 CPU／GPU 環境選擇。
 
 ```powershell
 git clone https://github.com/Neptgear/TSMC-Stock-Prediction.git
 cd TSMC-Stock-Prediction
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install flask numpy pandas torch yfinance requests
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m flask --app app:create_app run --host 127.0.0.1 --port 5000
 ```
 
@@ -108,7 +128,9 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 - **歷史保存設定存在不一致**：上述 Run 的 `config.json` 記錄 `train_ratio=0.6`，`split_info.json` 卻記錄 `ratio_samples_0.80`，測試日期範圍也與 `test_dates.json` 不同。新的稽核工具會把這類情況判定為失敗；該歷史 Run 僅能作為介面與保存格式展示，不能當作已驗證的泛化結果。
 - **部分進階參數需逐路徑確認**：介面存在 Walk Splits、Split Mode 與基本面選項，但主要 Seq2Seq／TFT 分流並不等同於後面的舊訓練路徑；不能將所有選項標為已驗證有效。
 - **模型屬研究實作**：TFT-style 與 Transformer 需要進一步做基準、消融及獨立時段測試；預測曲線與歷史方向指標不構成交易獲利證明。
-- **工程可重現性尚待補齊**：後續需鎖定依賴、補環境與流程測試、核對資料來源，並整理已追蹤的快取與日誌。倉庫已包含 `__pycache__/secrets_local.cpython-313.pyc`，公開前應檢查是否含本機設定；本次未讀取其內容，也未刪除或改寫歷史。
+- **四日測試不是穩健性證明**：下一步應執行至少 20 個互不重疊的 rolling-origin 封存期間、重複不同種子，並與最後收盤、移動平均及線性模型比較。
+- **部署與推論封裝仍待補齊**：新的封存回測可重跑，但尚未把模型權重、scaler、環境雜湊與完整資料快照封裝為可直接部署的版本化產物。
+- **交易日曆仍可加強**：目前未來日期使用一般工作日，尚未整合臺灣證交所休市日曆；本次 09-14 至 09-17 不受影響。
 
 ## 主要檔案
 
@@ -123,7 +145,10 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 | [`tft_model.py`](tft_model.py) | TFT-style PyTorch 模型組件 |
 | [`runs_utils.py`](runs_utils.py) | Run 清單、歷史結果讀取及相關工具 |
 | [`scripts/audit_saved_run.py`](scripts/audit_saved_run.py) | 命令列結果核對工具 |
+| [`scripts/asof_backtest.py`](scripts/asof_backtest.py) | 截止日封存、多步預測與事後評分工具 |
 | [`tests/test_data_quality.py`](tests/test_data_quality.py) | 資料品質與 Run 稽核測試 |
+| [`tests/test_multihorizon_alignment.py`](tests/test_multihorizon_alignment.py) | 多步日期、目標對齊與切分隔離測試 |
+| [`docs/results/asof-backtest-2026-09-11.md`](docs/results/asof-backtest-2026-09-11.md) | 2026-09-11 截止的四日實測報告 |
 | [`runs/`](runs/) | 已保存的實驗資料 |
 
 說明最後核對：2026-09-17。本次同時修改資料取得、主要訓練前處理、結果稽核工具與測試；既有歷史 Run 保留原狀。
