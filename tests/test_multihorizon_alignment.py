@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 
 from train_transformer import (
+    TrainConfig,
+    _configured_future_dates,
     _future_business_dates,
     _future_known_matrix,
     build_seq2seq_tensors,
@@ -47,6 +49,17 @@ class MultiHorizonAlignmentTests(unittest.TestCase):
         )
         matrix = _future_known_matrix(dates, ["day_of_week", "is_month_end"])
         np.testing.assert_array_equal(matrix[:, 0], np.array([0, 1, 2, 3], dtype=np.float32))
+
+    def test_known_exchange_schedule_can_skip_a_weekday_holiday(self):
+        cfg = TrainConfig(
+            horizon=4,
+            forecast_dates=("2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24"),
+        )
+        dates = _configured_future_dates(pd.Timestamp("2026-06-17"), cfg)
+        self.assertEqual(
+            [str(value.date()) for value in dates],
+            ["2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24"],
+        )
 
 
 if __name__ == "__main__":
