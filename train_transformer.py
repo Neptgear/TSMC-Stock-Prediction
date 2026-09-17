@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import os
 import pickle
@@ -430,6 +431,9 @@ class TrainConfig:
     residual_base: str = "close"  # 'close' or 'ma20'
     loss: str = "mse"  # 'mse', 'huber', or 'mae'
     huber_delta: float = 1.0
+    # Select checkpoints on the metric that matches the project objective.
+    selection_metric: str = "mae"  # 'mae', 'rmse', or 'loss'
+    random_seed: int = 42
     # TFT-specific: quantile loss configuration
     quantiles: Tuple[float, ...] = (0.1, 0.5, 0.9)
     clip_grad_norm: float = 0.0  # 0 disables clipping
@@ -597,7 +601,7 @@ def _full_history_refit_dataset(
 
 def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     """Full seq2seq transformer training with observed/known/static splits and causal decoding."""
-    seed_everything(42)
+    seed_everything(cfg.random_seed)
     df = get_ohlcv(ticker_yt=cfg.ticker, start=cfg.start, end=cfg.end, auto_adjust=True)
     data_quality_report = dict(df.attrs.get("data_quality", {}))
     df = standardize_ohlcv_columns(df)
@@ -789,13 +793,19 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         opt, mode="min", factor=0.5, patience=max(2, cfg.patience // 2), min_lr=1e-6
     ) if cfg.lr_scheduler else None
-    criterion = nn.MSELoss()
+    if cfg.loss.lower() == "huber":
+        criterion = nn.SmoothL1Loss(beta=cfg.huber_delta)
+    elif cfg.loss.lower() == "mae":
+        criterion = nn.L1Loss()
+    else:
+        criterion = nn.MSELoss()
 
     best_val = float("inf")
     best_state = None
     no_improve = 0
     train_losses: list[float] = []
     val_losses: list[float] = []
+    val_selection_scores: list[float] = []
     for epoch in range(1, cfg.epochs + 1):
         model.train()
         train_loss = 0.0
@@ -819,6 +829,9 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
 
         model.eval()
         val_loss = 0.0
+        val_abs_error = 0.0
+        val_sq_error = 0.0
+        val_elements = 0
         with torch.no_grad():
             for batch in val_loader:
                 enc_b, dec_k, dec_s, stc, yb = batch
@@ -830,14 +843,24 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
                 pred = model(enc_b, dec_k, dec_s, stc)
                 loss = criterion(pred, yb)
                 val_loss += loss.item() * enc_b.size(0)
+                diff = pred - yb
+                val_abs_error += torch.abs(diff).sum().item()
+                val_sq_error += torch.square(diff).sum().item()
+                val_elements += int(diff.numel())
         val_loss /= len(val_loader.dataset) if len(val_loader.dataset) > 0 else val_loss
         val_losses.append(float(val_loss))
-        val_losses.append(float(val_loss))
+        val_mae = val_abs_error / max(1, val_elements)
+        val_rmse = float(np.sqrt(val_sq_error / max(1, val_elements)))
+        metric_name = str(getattr(cfg, "selection_metric", "mae")).lower()
+        selection_score = val_mae if metric_name == "mae" else (val_rmse if metric_name == "rmse" else val_loss)
+        val_selection_scores.append(
+            float(selection_score * y_std if metric_name in {"mae", "rmse"} else selection_score)
+        )
         if scheduler is not None:
-            scheduler.step(val_loss)
-        if val_loss + 1e-9 < best_val:
-            best_val = val_loss
-            best_state = model.state_dict()
+            scheduler.step(selection_score)
+        if selection_score + 1e-9 < best_val:
+            best_val = selection_score
+            best_state = copy.deepcopy(model.state_dict())
             no_improve = 0
         else:
             no_improve += 1
@@ -1016,6 +1039,12 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
         "effective_train_ratio": float(split_idx / num_samples),
         "separation_ok": bool(not target_dates_train or not target_dates_test or target_dates_train[-1] < target_dates_test[0]),
         "data_quality": data_quality_report,
+        "selection_metric": metric_name,
+        "best_validation_selection_score": float(
+            best_val * y_std if metric_name in {"mae", "rmse"} else best_val
+        ),
+        "validation_selection_history": val_selection_scores,
+        "random_seed": int(cfg.random_seed),
     }
 
     if cfg.forecast_refit_epochs > 0:
@@ -1112,7 +1141,7 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
 
 def run_training_tft_full(cfg: TrainConfig) -> dict:
     """Full TFT-style training with observed/known/static splits and quantile outputs."""
-    seed_everything(42)
+    seed_everything(cfg.random_seed)
     future_point_error = None
     df = get_ohlcv(ticker_yt=cfg.ticker, start=cfg.start, end=cfg.end, auto_adjust=True)
     data_quality_report = dict(df.attrs.get("data_quality", {}))
@@ -1307,6 +1336,9 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     no_improve = 0
     train_losses: list[float] = []
     val_losses: list[float] = []
+    val_selection_scores: list[float] = []
+    qs = getattr(cfg, "quantiles", (0.1, 0.5, 0.9))
+    med_idx = int(min(range(len(qs)), key=lambda i: abs(qs[i] - 0.5)))
     for epoch in range(1, cfg.epochs + 1):
         model.train()
         train_loss = 0.0
@@ -1330,6 +1362,9 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
 
         model.eval()
         val_loss = 0.0
+        val_abs_error = 0.0
+        val_sq_error = 0.0
+        val_elements = 0
         with torch.no_grad():
             for batch in val_loader:
                 enc_b, dec_k, dec_s, stc, yb = batch
@@ -1341,13 +1376,24 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
                 pred = model(enc_b, dec_k, dec_s, stc)
                 loss = quantile_loss(pred, yb, model.quantiles)
                 val_loss += loss.item() * enc_b.size(0)
+                diff = pred[..., med_idx] - yb
+                val_abs_error += torch.abs(diff).sum().item()
+                val_sq_error += torch.square(diff).sum().item()
+                val_elements += int(diff.numel())
         val_loss /= len(val_loader.dataset) if len(val_loader.dataset) > 0 else val_loss
         val_losses.append(float(val_loss))
+        val_mae = val_abs_error / max(1, val_elements)
+        val_rmse = float(np.sqrt(val_sq_error / max(1, val_elements)))
+        metric_name = str(getattr(cfg, "selection_metric", "mae")).lower()
+        selection_score = val_mae if metric_name == "mae" else (val_rmse if metric_name == "rmse" else val_loss)
+        val_selection_scores.append(
+            float(selection_score * y_std if metric_name in {"mae", "rmse"} else selection_score)
+        )
         if scheduler is not None:
-            scheduler.step(val_loss)
-        if val_loss + 1e-9 < best_val:
-            best_val = val_loss
-            best_state = model.state_dict()
+            scheduler.step(selection_score)
+        if selection_score + 1e-9 < best_val:
+            best_val = selection_score
+            best_state = copy.deepcopy(model.state_dict())
             no_improve = 0
         else:
             no_improve += 1
@@ -1361,8 +1407,6 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     train_eval_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=False, drop_last=False)
     val_eval_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, drop_last=False)
     test_eval_loader = DataLoader(test_ds, batch_size=cfg.batch_size, shuffle=False, drop_last=False)
-    qs = getattr(cfg, "quantiles", (0.1, 0.5, 0.9))
-    med_idx = int(min(range(len(qs)), key=lambda i: abs(qs[i] - 0.5)))
 
     def _collect_preds(loader: DataLoader, base_slice: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         preds_seq_local: list[np.ndarray] = []
@@ -1565,6 +1609,12 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
         "effective_train_ratio": float(split_idx / num_samples),
         "separation_ok": bool(not target_dates_train or not target_dates_test or target_dates_train[-1] < target_dates_test[0]),
         "data_quality": data_quality_report,
+        "selection_metric": metric_name,
+        "best_validation_selection_score": float(
+            best_val * y_std if metric_name in {"mae", "rmse"} else best_val
+        ),
+        "validation_selection_history": val_selection_scores,
+        "random_seed": int(cfg.random_seed),
     }
 
     if cfg.forecast_refit_epochs > 0:
@@ -2922,6 +2972,8 @@ def main() -> None:
     parser.add_argument("--residual_base", type=str, default="close", choices=["close", "ma20"])
     parser.add_argument("--loss", type=str, default="mse", choices=["mse", "huber", "mae"])
     parser.add_argument("--huber_delta", type=float, default=1.0)
+    parser.add_argument("--selection_metric", type=str, default="mae", choices=["mae", "rmse", "loss"])
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--quantiles", type=str, default="0.1,0.5,0.9", help="Quantiles for TFT (comma-separated)")
     parser.add_argument("--clip_grad", type=float, default=0.0)
     parser.add_argument("--no_scheduler", action="store_true")
@@ -2960,6 +3012,8 @@ def main() -> None:
         residual_base=args.residual_base,
         loss=args.loss,
         huber_delta=args.huber_delta,
+        selection_metric=args.selection_metric,
+        random_seed=args.seed,
         quantiles=tuple(float(x) for x in str(args.quantiles).split(",")),
         clip_grad_norm=args.clip_grad,
         lr_scheduler=not bool(args.no_scheduler),
