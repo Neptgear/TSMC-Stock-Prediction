@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import json
 import os
 import pickle
@@ -512,6 +512,7 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     """Full seq2seq transformer training with observed/known/static splits and causal decoding."""
     seed_everything(42)
     df = get_ohlcv(ticker_yt=cfg.ticker, start=cfg.start, end=cfg.end, auto_adjust=True)
+    data_quality_report = dict(df.attrs.get("data_quality", {}))
     df = standardize_ohlcv_columns(df)
     events_df = get_event_countdowns(cfg.ticker, df.index)
     feat_df = compute_features(df, target=cfg.target, horizon=cfg.horizon, include_extra=True, events_df=events_df)
@@ -522,39 +523,21 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     static_cols = [c for c in feat_df.columns if isinstance(c, str) and c.startswith("f_")]
     observed_cols = [c for c in feat_df.columns if c not in known_future_cols and c not in static_cols and c != "target"]
 
-    # Fill observed NaNs to avoid dropping long gaps; drop only rows with missing target
+    # Forward fill uses only information available at or before each row. Do not
+    # backfill, because it would copy future observations into earlier samples.
     if observed_cols:
-        feat_df[observed_cols] = feat_df[observed_cols].ffill().bfill()
-        feat_df[observed_cols] = feat_df[observed_cols].fillna(0)
-    feat_df = feat_df.dropna(subset=["target"])
+        feat_df[observed_cols] = feat_df[observed_cols].ffill()
+    clean_subset = observed_cols + ["target"]
+    feat_df = feat_df.dropna(subset=clean_subset)
     if len(feat_df) == 0:
         raise RuntimeError("No rows remaining after cleaning features; try an earlier start, smaller window, or disable fundamentals.")
 
-    # Standardize observed/known/static separately
-    def _standardize_cols(df_local: pd.DataFrame, cols: List[str]) -> Tuple[pd.DataFrame, Dict[str, np.ndarray]]:
-        if not cols:
-            return df_local, {"mean": np.array([]), "std": np.array([])}
-        if len(df_local) == 0:
-            return df_local, {"mean": np.array([]), "std": np.array([])}
-        # Ensure float columns to avoid dtype warnings when assigning scaled values
-        df_local = df_local.copy()
-        df_local[cols] = df_local[cols].astype(np.float32)
-        vals = df_local[cols].values.astype(np.float32)
-        mean = vals.mean(axis=0)
-        std = vals.std(axis=0)
-        std[std == 0] = 1.0
-        scaled = ((vals - mean) / std).astype(np.float32)
-        df_local.loc[:, cols] = scaled
-        return df_local, {"mean": mean, "std": std}
-
-    feat_df, obs_scaler = _standardize_cols(feat_df, observed_cols)
-    # For known/static, fill NaNs with 0 before scaling to avoid dropping rows
+    # Known-future values may use a neutral fallback. Static/fundamental values
+    # are forward-filled only; neither group is standardized before splitting.
     if known_future_cols:
         feat_df[known_future_cols] = feat_df[known_future_cols].fillna(0)
     if static_cols:
-        feat_df[static_cols] = feat_df[static_cols].fillna(0)
-    feat_df, known_scaler = _standardize_cols(feat_df, known_future_cols)
-    feat_df, static_scaler = _standardize_cols(feat_df, static_cols)
+        feat_df[static_cols] = feat_df[static_cols].ffill().fillna(0)
 
     # Build tensors
     raw_close_series = df["Close"]
@@ -631,35 +614,26 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
         base_val = base_test
         anchor_val = []
 
-    # Validation split (tail of train set) for early stopping
-    val_ratio = float(max(0.0, min(1.0, getattr(cfg, "val_ratio", 0.1))))
-    val_count = int(round(len(enc_train) * val_ratio)) if val_ratio > 0 else 0
-    if val_count >= len(enc_train):
-        val_count = max(0, len(enc_train) - 1)
-    if val_count > 0:
-        enc_val = enc_train[-val_count:]
-        dec_known_val = dec_known_train[-val_count:]
-        dec_start_val = dec_start_train[-val_count:]
-        static_val = static_train[-val_count:]
-        y_val_full = y_train_full[-val_count:]
-        base_val = base_train[-val_count:]
-        anchor_val = anchor_train[-val_count:]
+    # Fit all input scalers on the final training partition only. Validation,
+    # test and future inputs must never influence preprocessing statistics.
+    obs_scaler = SequenceStandardScaler().fit(enc_train)
+    enc_train = obs_scaler.transform(enc_train)
+    enc_val = obs_scaler.transform(enc_val)
+    enc_test = obs_scaler.transform(enc_test)
 
-        enc_train = enc_train[:-val_count]
-        dec_known_train = dec_known_train[:-val_count]
-        dec_start_train = dec_start_train[:-val_count]
-        static_train = static_train[:-val_count]
-        y_train_full = y_train_full[:-val_count]
-        base_train = base_train[:-val_count]
-        anchor_train = anchor_train[:-val_count]
-    else:
-        enc_val = enc_test
-        dec_known_val = dec_known_test
-        dec_start_val = dec_start_test
-        static_val = static_test
-        y_val_full = y_test_full
-        base_val = base_test
-        anchor_val = []
+    known_scaler = None
+    if dec_known_train.shape[-1] > 0:
+        known_scaler = SequenceStandardScaler().fit(dec_known_train)
+        dec_known_train = known_scaler.transform(dec_known_train)
+        dec_known_val = known_scaler.transform(dec_known_val)
+        dec_known_test = known_scaler.transform(dec_known_test)
+
+    static_scaler = None
+    if static_train.shape[-1] > 0:
+        static_scaler = VectorStandardScaler().fit(static_train)
+        static_train = static_scaler.transform(static_train)
+        static_val = static_scaler.transform(static_val)
+        static_test = static_scaler.transform(static_test)
 
     # Residualize targets if configured
     if cfg.target == "next_close" and cfg.residualize:
@@ -927,7 +901,11 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
         "test_end": _to_date_str(anchor_test[-1]) if anchor_test else None,
         "cutoff": _to_date_str(cfg.split_date) if cfg.split_date else None,
         "split_rule": split_rule,
+        "requested_split_mode": cfg.split_mode,
+        "requested_train_ratio": float(cfg.train_ratio),
+        "effective_train_ratio": float(split_idx / num_samples),
         "separation_ok": bool(len(anchor_train) == 0 or len(anchor_test) == 0 or anchor_train[-1] <= anchor_test[0]),
+        "data_quality": data_quality_report,
     }
 
     # Lightweight future forecast using the latest available window
@@ -936,10 +914,14 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     future_point_error = None
     try:
         model.eval()
-        enc_future = enc_obs[-1:]
+        enc_future = obs_scaler.transform(enc_obs[-1:])
         dec_known_future = dec_known[-1:] if dec_known.shape[1] else np.zeros((1, cfg.horizon, 0), dtype=np.float32)
+        if known_scaler is not None:
+            dec_known_future = known_scaler.transform(dec_known_future)
         dec_start_future = np.zeros_like(dec_start[-1:])
         static_future = static_vecs[-1:] if static_vecs.shape[1] else np.zeros((1, 0), dtype=np.float32)
+        if static_scaler is not None:
+            static_future = static_scaler.transform(static_future)
         with torch.no_grad():
             pred_future = model(
                 torch.from_numpy(enc_future).to(cfg.device),
@@ -1020,6 +1002,7 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     seed_everything(42)
     future_point_error = None
     df = get_ohlcv(ticker_yt=cfg.ticker, start=cfg.start, end=cfg.end, auto_adjust=True)
+    data_quality_report = dict(df.attrs.get("data_quality", {}))
     df = standardize_ohlcv_columns(df)
     events_df = get_event_countdowns(cfg.ticker, df.index)
     feat_df = compute_features(df, target=cfg.target, horizon=cfg.horizon, include_extra=True, events_df=events_df)
@@ -1030,34 +1013,16 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     observed_cols = [c for c in feat_df.columns if c not in known_future_cols and c not in static_cols and c != "target"]
 
     if observed_cols:
-        feat_df[observed_cols] = feat_df[observed_cols].ffill().bfill()
-        feat_df[observed_cols] = feat_df[observed_cols].fillna(0)
-    feat_df = feat_df.dropna(subset=["target"])
+        feat_df[observed_cols] = feat_df[observed_cols].ffill()
+    clean_subset = observed_cols + ["target"]
+    feat_df = feat_df.dropna(subset=clean_subset)
     if len(feat_df) == 0:
         raise RuntimeError("No rows remaining after cleaning features; try an earlier start, smaller window, or disable fundamentals.")
 
-    def _standardize_cols(df_local: pd.DataFrame, cols: List[str]) -> Tuple[pd.DataFrame, Dict[str, np.ndarray]]:
-        if not cols:
-            return df_local, {"mean": np.array([]), "std": np.array([])}
-        if len(df_local) == 0:
-            return df_local, {"mean": np.array([]), "std": np.array([])}
-        df_local = df_local.copy()
-        df_local[cols] = df_local[cols].astype(np.float32)
-        vals = df_local[cols].values.astype(np.float32)
-        mean = vals.mean(axis=0)
-        std = vals.std(axis=0)
-        std[std == 0] = 1.0
-        scaled = ((vals - mean) / std).astype(np.float32)
-        df_local.loc[:, cols] = scaled
-        return df_local, {"mean": mean, "std": std}
-
-    feat_df, obs_scaler = _standardize_cols(feat_df, observed_cols)
     if known_future_cols:
         feat_df[known_future_cols] = feat_df[known_future_cols].fillna(0)
     if static_cols:
-        feat_df[static_cols] = feat_df[static_cols].fillna(0)
-    feat_df, known_scaler = _standardize_cols(feat_df, known_future_cols)
-    feat_df, static_scaler = _standardize_cols(feat_df, static_cols)
+        feat_df[static_cols] = feat_df[static_cols].ffill().fillna(0)
 
     raw_close_series = df["Close"]
     enc_obs, dec_known, dec_start, static_vecs, y_all, base_last, anchor_dates, target_dates = build_seq2seq_tensors(
@@ -1131,6 +1096,26 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
         y_val_full = y_test_full
         base_val = base_test
         anchor_val = []
+
+    # Fit input preprocessing on training data only to avoid look-ahead leakage.
+    obs_scaler = SequenceStandardScaler().fit(enc_train)
+    enc_train = obs_scaler.transform(enc_train)
+    enc_val = obs_scaler.transform(enc_val)
+    enc_test = obs_scaler.transform(enc_test)
+
+    known_scaler = None
+    if dec_known_train.shape[-1] > 0:
+        known_scaler = SequenceStandardScaler().fit(dec_known_train)
+        dec_known_train = known_scaler.transform(dec_known_train)
+        dec_known_val = known_scaler.transform(dec_known_val)
+        dec_known_test = known_scaler.transform(dec_known_test)
+
+    static_scaler = None
+    if static_train.shape[-1] > 0:
+        static_scaler = VectorStandardScaler().fit(static_train)
+        static_train = static_scaler.transform(static_train)
+        static_val = static_scaler.transform(static_val)
+        static_test = static_scaler.transform(static_test)
 
     # Residualize targets if configured
     if cfg.target == "next_close" and cfg.residualize:
@@ -1383,10 +1368,14 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     actual_target = None
     try:
         model.eval()
-        enc_future = enc_obs[-1:]
+        enc_future = obs_scaler.transform(enc_obs[-1:])
         dec_known_future = dec_known[-1:] if dec_known.shape[1] else np.zeros((1, cfg.horizon, 0), dtype=np.float32)
+        if known_scaler is not None:
+            dec_known_future = known_scaler.transform(dec_known_future)
         dec_start_future = np.zeros_like(dec_start[-1:])
         static_future = static_vecs[-1:] if static_vecs.shape[1] else np.zeros((1, 0), dtype=np.float32)
+        if static_scaler is not None:
+            static_future = static_scaler.transform(static_future)
         with torch.no_grad():
             pred_future_full = model(
                 torch.from_numpy(enc_future).to(cfg.device),
@@ -1453,7 +1442,11 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
         "test_end": _to_date_str(anchor_test[-1]) if anchor_test else None,
         "cutoff": _to_date_str(cfg.split_date) if cfg.split_date else None,
         "split_rule": split_rule,
+        "requested_split_mode": cfg.split_mode,
+        "requested_train_ratio": float(cfg.train_ratio),
+        "effective_train_ratio": float(split_idx / num_samples),
         "separation_ok": bool(len(anchor_train) == 0 or len(anchor_test) == 0 or anchor_train[-1] <= anchor_test[0]),
+        "data_quality": data_quality_report,
     }
 
     return {
