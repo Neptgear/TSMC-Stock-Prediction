@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python sources
-        run: python -m py_compile data_fetch.py data_quality.py ta_features.py tft_model.py train_transformer.py scripts/audit_saved_run.py scripts/asof_backtest.py scripts/rolling_price_baselines.py
+        run: python -m py_compile data_fetch.py data_quality.py ta_features.py tft_model.py train_transformer.py scripts/audit_saved_run.py scripts/asof_backtest.py scripts/rolling_price_baselines.py scripts/rolling_model_backtest.py
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 

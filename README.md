@@ -70,11 +70,14 @@ python scripts/audit_saved_run.py runs/<run-id> --output audit.json
 
 另外以最近 20 個互不重疊四日區間（共 80 個樣本）測試四種價格基準，最後收盤不變以 MAE 49.22 排名第一，線性趨勢則為 62.19、排名最後。因此，線性趨勢在上述單一四日勝出只是局部現象。深度模型的下一個可信門檻，是在相同 20 區間流程中穩定低於 49.22，而不是只挑一週展示。完整基準報告見 [`docs/results/rolling-price-baselines-2026-09-17.md`](docs/results/rolling-price-baselines-2026-09-17.md)。
 
+縮小版模型接著完成 20 區間 × 3 種子測試，共 120 次訓練、480 筆預測。Transformer 三個種子的 MAE 為 49.01、49.13、48.82，依預定數值規則皆低於 49.22；TFT-style 為 48.61、49.25、49.05，其中一個種子未通過。不過兩模型相對基準的成對 bootstrap 95% 信賴區間全部跨過零，因此不能宣稱已有明顯優勢。完整方法與逐種子結論見 [`docs/results/rolling-models-20x3-2026-09-17.md`](docs/results/rolling-models-20x3-2026-09-17.md)。
+
 重跑命令：
 
 ```powershell
 python scripts/asof_backtest.py --cutoff 2026-09-11 --actual-end 2026-09-17 --epochs 12
 python scripts/rolling_price_baselines.py --end 2026-09-17 --periods 20 --horizon 4
+python scripts/rolling_model_backtest.py --periods 20 --seeds 11,42,97 --models transformer,tft --epochs 4 --refit-epochs 2 --d-model 32
 ```
 
 ## 專案角色與實作能力
@@ -134,7 +137,7 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 - **歷史保存設定存在不一致**：上述 Run 的 `config.json` 記錄 `train_ratio=0.6`，`split_info.json` 卻記錄 `ratio_samples_0.80`，測試日期範圍也與 `test_dates.json` 不同。新的稽核工具會把這類情況判定為失敗；該歷史 Run 僅能作為介面與保存格式展示，不能當作已驗證的泛化結果。
 - **部分進階參數需逐路徑確認**：介面存在 Walk Splits、Split Mode 與基本面選項，但主要 Seq2Seq／TFT 分流並不等同於後面的舊訓練路徑；不能將所有選項標為已驗證有效。
 - **模型屬研究實作**：TFT-style 與 Transformer 需要進一步做基準、消融及獨立時段測試；預測曲線與歷史方向指標不構成交易獲利證明。
-- **四日測試不是穩健性證明**：四種簡單基準已完成 20 個互不重疊 rolling-origin 區間；Transformer／TFT-style 尚須在相同區間及多個種子下完成比較。
+- **數值略勝不等於明顯勝出**：Transformer 已在 20 個 rolling-origin 區間的三個種子中數值略低於基準，但改善幅度小且95%信賴區間跨零；TFT-style另有一個種子未過門檻。
 - **部署與推論封裝仍待補齊**：新的封存回測可重跑，但尚未把模型權重、scaler、環境雜湊與完整資料快照封裝為可直接部署的版本化產物。
 - **交易日曆仍可加強**：目前未來日期使用一般工作日，尚未整合臺灣證交所休市日曆；本次 09-14 至 09-17 不受影響。
 
@@ -153,10 +156,12 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 | [`scripts/audit_saved_run.py`](scripts/audit_saved_run.py) | 命令列結果核對工具 |
 | [`scripts/asof_backtest.py`](scripts/asof_backtest.py) | 截止日封存、多步預測與事後評分工具 |
 | [`scripts/rolling_price_baselines.py`](scripts/rolling_price_baselines.py) | 多期間價格基準與 MAE／RMSE 排名工具 |
+| [`scripts/rolling_model_backtest.py`](scripts/rolling_model_backtest.py) | 多模型、多種子 rolling-origin 測試與可續跑結果保存 |
 | [`tests/test_data_quality.py`](tests/test_data_quality.py) | 資料品質與 Run 稽核測試 |
 | [`tests/test_multihorizon_alignment.py`](tests/test_multihorizon_alignment.py) | 多步日期、目標對齊與切分隔離測試 |
 | [`docs/results/asof-backtest-2026-09-11.md`](docs/results/asof-backtest-2026-09-11.md) | 2026-09-11 截止的四日實測報告 |
 | [`docs/results/rolling-price-baselines-2026-09-17.md`](docs/results/rolling-price-baselines-2026-09-17.md) | 20 個四日區間的價格基準報告 |
+| [`docs/results/rolling-models-20x3-2026-09-17.md`](docs/results/rolling-models-20x3-2026-09-17.md) | 120 次模型訓練與信賴區間報告 |
 | [`runs/`](runs/) | 已保存的實驗資料 |
 
 說明最後核對：2026-09-17。本次同時修改資料取得、主要訓練前處理、結果稽核工具與測試；既有歷史 Run 保留原狀。

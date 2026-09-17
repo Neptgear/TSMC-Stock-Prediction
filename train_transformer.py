@@ -465,6 +465,9 @@ class TrainConfig:
     # Optional post-evaluation refit on every labeled sample available by the
     # cutoff. Historical metrics are computed before this refit.
     forecast_refit_epochs: int = 0
+    # Optional known exchange schedule for historical as-of evaluation. Values
+    # are dates only; no future prices are supplied to the model.
+    forecast_dates: Optional[Tuple[str, ...]] = None
 
 
 def suggest_window(h: int, min_w: int = 30, max_w: int = 504) -> int:
@@ -519,6 +522,19 @@ def _future_business_dates(last_observed, horizon: int) -> pd.DatetimeIndex:
     """Return forecast dates without consulting any future price observations."""
     start = pd.Timestamp(last_observed) + pd.tseries.offsets.BDay(1)
     return pd.bdate_range(start=start, periods=int(max(1, horizon)))
+
+
+def _configured_future_dates(last_observed, cfg: TrainConfig) -> pd.DatetimeIndex:
+    if cfg.forecast_dates:
+        dates = pd.DatetimeIndex(pd.to_datetime(list(cfg.forecast_dates)))
+        if len(dates) != int(cfg.horizon):
+            raise ValueError("forecast_dates length must match horizon")
+        if dates.has_duplicates or not dates.is_monotonic_increasing:
+            raise ValueError("forecast_dates must be unique and increasing")
+        if dates[0] <= pd.Timestamp(last_observed):
+            raise ValueError("forecast_dates must be after the cutoff")
+        return dates
+    return _future_business_dates(last_observed, cfg.horizon)
 
 
 def _future_known_matrix(dates: Sequence, columns: Sequence[str]) -> np.ndarray:
@@ -1073,7 +1089,7 @@ def run_training_transformer_seq2seq(cfg: TrainConfig) -> dict:
     future_point_error = None
     try:
         model.eval()
-        future_dates = _future_business_dates(df.index[-1], cfg.horizon)
+        future_dates = _configured_future_dates(df.index[-1], cfg)
         enc_future_raw = feat_df[observed_cols].iloc[-cfg.window_size:].values.astype(np.float32)[None, ...]
         if enc_future_raw.shape[1] != cfg.window_size:
             raise RuntimeError("Not enough latest feature rows for an as-of forecast window.")
@@ -1543,7 +1559,7 @@ def run_training_tft_full(cfg: TrainConfig) -> dict:
     actual_target = None
     try:
         model.eval()
-        future_dates = _future_business_dates(df.index[-1], cfg.horizon)
+        future_dates = _configured_future_dates(df.index[-1], cfg)
         enc_future_raw = feat_df[observed_cols].iloc[-cfg.window_size:].values.astype(np.float32)[None, ...]
         if enc_future_raw.shape[1] != cfg.window_size:
             raise RuntimeError("Not enough latest feature rows for an as-of forecast window.")
