@@ -22,7 +22,7 @@
 | 查看預測與診斷 | 圖表及結果區可呈現真實值與預測值、誤差與方向指標、基準比較及學習曲線；可顯示的內容取決於該次結果實際保存的欄位 |
 | 保存與讀取實驗 | `runs/` 保存設定、數值陣列與 JSON；網頁讀取既有結果時使用 `load_run_results`，不會重新訓練或重新推論 |
 
-「程式中有此流程」與「已在新環境實測通過」是不同層級。本說明於 2026-09-09 根據程式與既有實驗檔案整理，本次未重新訓練模型或完成從零安裝聯測。
+「程式中有此流程」與「已在新環境實測通過」是不同層級。本說明根據程式與既有實驗檔案整理；資料品質稽核已有自動測試，但模型仍需在目標環境完成一次從零訓練聯測。
 
 ## 系統組成與製作流程
 
@@ -31,6 +31,25 @@
 3. **模型訓練**：`run_training` 分流至 Transformer Seq2Seq 或 TFT-style 路徑。`tft_model.py` 以 PyTorch 組合變數門控、LSTM 編碼／解碼、多頭注意力及分位數輸出；屬專案中的 TFT-style 實作，尚未證明與原始 TFT 論文完全等價。
 4. **結果展示**：Flask 將訓練結果交給 Jinja 模板與 Plotly，呈現預測曲線、指标與診斷資訊。
 5. **實驗留存**：將設定、預測陣列、日期、指標及可用診斷資料存入 `runs/`，供後續回顧與比較。
+
+## 資料品質與結果核對
+
+新取得的每一份行情資料都會先通過 `data_quality.py` 的 OHLCV 稽核，再進入特徵與模型流程。檢查內容包括必要欄位、日期有效性與順序、重複日期、缺值／無限值、正價格、High／Low 合理範圍及非負成交量。稽核報告會附在資料物件，新的訓練結果也會將報告寫入 `split_info`。
+
+本次修正的防洩漏原則：
+
+- Yahoo Finance 調整後行情不再與證交所未調整行情逐列混接；主要來源完整失敗時才切換來源。
+- 觀察特徵只允許向前填補，不使用會把未來數值帶回過去的 `bfill`。
+- Transformer 與 TFT-style 的輸入標準化只以最終訓練分割擬合，再套用到驗證、測試與未來輸入。
+- 新的切分紀錄同時保存要求的比例、實際比例、規則、日期區間與來源稽核報告，方便追查設定是否一致。
+
+可用以下命令核對一個已保存的 Run；成功回傳碼為 0，不一致則為 1，並可輸出 JSON 報告：
+
+```powershell
+python scripts/audit_saved_run.py runs/<run-id> --output audit.json
+```
+
+稽核會重新計算 MSE、RMSE、MAE，核對預測／真實值／日期數量與日期順序，並比較 `config.json`、`split_info.json` 的切分比例和測試日期。它只證明保存檔案彼此一致，不等於模型具有投資獲利能力。
 
 ## 專案角色與實作能力
 
@@ -85,8 +104,8 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 
 ## 已知限制與後續改進
 
-- **資料前處理需要改善**：目前兩條主要訓練路徑在切分前，對完整特徵資料計算標準化統計量，並包含 `bfill`；因此存在未來資訊進入前處理的風險。後續應以訓練區間擬合前處理，並檢查每項特徵在當時是否可取得。
-- **保存設定的一致性尚待釐清**：上述 Run 的 `config.json` 記錄 `train_ratio=0.6`，`split_info.json` 卻記錄 `ratio_samples_0.80`；後者的測試日期範圍也與 `test_dates.json` 不同，可能涉及視窗錨點與目標日期等語意，需追查後再定論。故不能只引用漂亮指標宣稱泛化能力。
+- **新舊結果必須分開解讀**：主要 Transformer／TFT-style 路徑已移除 `bfill`，並改為只用訓練分割擬合輸入標準化；既有 Run 是修正前產物，不會被改寫，也不能用新流程替它背書。
+- **歷史保存設定存在不一致**：上述 Run 的 `config.json` 記錄 `train_ratio=0.6`，`split_info.json` 卻記錄 `ratio_samples_0.80`，測試日期範圍也與 `test_dates.json` 不同。新的稽核工具會把這類情況判定為失敗；該歷史 Run 僅能作為介面與保存格式展示，不能當作已驗證的泛化結果。
 - **部分進階參數需逐路徑確認**：介面存在 Walk Splits、Split Mode 與基本面選項，但主要 Seq2Seq／TFT 分流並不等同於後面的舊訓練路徑；不能將所有選項標為已驗證有效。
 - **模型屬研究實作**：TFT-style 與 Transformer 需要進一步做基準、消融及獨立時段測試；預測曲線與歷史方向指標不構成交易獲利證明。
 - **工程可重現性尚待補齊**：後續需鎖定依賴、補環境與流程測試、核對資料來源，並整理已追蹤的快取與日誌。倉庫已包含 `__pycache__/secrets_local.cpython-313.pyc`，公開前應檢查是否含本機設定；本次未讀取其內容，也未刪除或改寫歷史。
@@ -98,10 +117,14 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 | [`app.py`](app.py) | Flask 入口、介面參數、模型呼叫、實驗保存 |
 | [`templates/index.html`](templates/index.html) | 參數表單、結果區及 Plotly 圖表 |
 | [`data_fetch.py`](data_fetch.py) | 行情、基本面與事件資料處理 |
+| [`data_quality.py`](data_quality.py) | OHLCV 與保存 Run 的一致性稽核 |
 | [`ta_features.py`](ta_features.py) | 技術特徵與時間序列視窗工具 |
 | [`train_transformer.py`](train_transformer.py) | 訓練分流、模型、指標及診斷 |
 | [`tft_model.py`](tft_model.py) | TFT-style PyTorch 模型組件 |
 | [`runs_utils.py`](runs_utils.py) | Run 清單、歷史結果讀取及相關工具 |
+| [`scripts/audit_saved_run.py`](scripts/audit_saved_run.py) | 命令列結果核對工具 |
+| [`tests/test_data_quality.py`](tests/test_data_quality.py) | 資料品質與 Run 稽核測試 |
 | [`runs/`](runs/) | 已保存的實驗資料 |
 
-說明核對基準：原始碼提交 `77bf92e434a7b1a3c8347cb9990a9cd2843d39d9`，2026-09-09。此 README 更新只補充說明，沒有修改模型或資料處理邏輯。
+說明最後核對：2026-09-17。本次同時修改資料取得、主要訓練前處理、結果稽核工具與測試；既有歷史 Run 保留原狀。
+
