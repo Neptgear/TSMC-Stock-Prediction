@@ -7,6 +7,8 @@ from typing import Optional, Tuple, List, Dict
 import numpy as np
 import pandas as pd
 
+from data_quality import audit_ohlcv
+
 # Optional local secrets (not committed). Create secrets_local.py with
 # ALPHAVANTAGE_API_KEY = "..." to use.
 try:
@@ -24,6 +26,17 @@ try:
     import requests  # type: ignore
 except Exception:  # pragma: no cover
     requests = None
+
+
+def _validated_ohlcv(df: pd.DataFrame, *, source: str, auto_adjust: bool) -> pd.DataFrame:
+    """Run one provider result through the shared market-data audit."""
+    # Invalid rows are removed and counted rather than silently filled. This
+    # keeps a single bad provider row from discarding an otherwise valid range.
+    clean, report = audit_ohlcv(df, strict=False)
+    report = dict(report)
+    report.update({"source": source, "auto_adjust": bool(auto_adjust)})
+    clean.attrs["data_quality"] = report
+    return clean
 
 
 def get_current_price(
@@ -71,7 +84,7 @@ def get_ohlcv(
     if provider and provider.lower() == "alpha":
         df_av = _fetch_alpha_vantage_ohlcv(ticker_yt, start=start, end=end, auto_adjust=auto_adjust)
         if df_av is not None and not df_av.empty:
-            return df_av
+            return _validated_ohlcv(df_av, source="alpha_vantage", auto_adjust=auto_adjust)
         raise RuntimeError("Alpha Vantage provider selected but no data returned.")
 
     def _fetch_yf() -> Optional[pd.DataFrame]:
@@ -96,10 +109,17 @@ def get_ohlcv(
             )
             # Flatten possible MultiIndex columns (yfinance may return them)
             if isinstance(df.columns, pd.MultiIndex):
-                # Prefer the last level as field names when possible
-                last = df.columns.get_level_values(-1)
-                if set(["Open", "High", "Low", "Close", "Adj Close", "Volume"]).issubset(set(last)) or "Close" in set(last):
-                    df.columns = last
+                # yfinance has used both (field, ticker) and (ticker, field).
+                # Select the level that actually contains OHLCV labels instead
+                # of assuming a fixed level order.
+                expected = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+                scores = []
+                for level in range(df.columns.nlevels):
+                    labels = {str(value) for value in df.columns.get_level_values(level)}
+                    scores.append((len(labels & expected), level))
+                best_score, best_level = max(scores)
+                if best_score:
+                    df.columns = df.columns.get_level_values(best_level)
                 else:
                     df.columns = ["_".join([str(x) for x in tup if str(x) != ""]).strip("_") for tup in df.columns]
             # Normalize column title case for consistency
@@ -114,7 +134,7 @@ def get_ohlcv(
             # Ensure a Close column exists (fallback to Adj Close if necessary)
             if "Close" not in df.columns and "Adj Close" in df.columns:
                 df["Close"] = df["Adj Close"]
-            return df.dropna()
+            return df
         except Exception:
             return None
 
@@ -130,7 +150,7 @@ def get_ohlcv(
             url = f"https://www.twse.com.tw/rwd/en/afterTrading/STOCK_DAY?response=json&date=&stockNo={sym}"
             if requests is None:
                 return None
-            r = requests.get(url, timeout=10, verify=False)
+            r = requests.get(url, timeout=10)
             if r.status_code != 200:
                 return None
             data = r.json()
@@ -157,33 +177,23 @@ def get_ohlcv(
             if "Date" in df.columns:
                 df["Date"] = pd.to_datetime(df["Date"])
                 df = df.set_index("Date").sort_index()
-            return df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+            return df[["Open", "High", "Low", "Close", "Volume"]]
         except Exception:
             return None
 
+    # Do not mix Yahoo's adjusted bars with TWSE's unadjusted bars. Validate one
+    # complete source and only fall back when the preferred source is absent.
+    if df_yf is not None and not df_yf.empty:
+        return _validated_ohlcv(df_yf, source="yahoo_finance", auto_adjust=auto_adjust)
+
     df_twse = _fetch_twse(ticker_yt) if ticker_yt.upper().endswith(".TW") else None
-
-    # Merge YF and TWSE (TWSE fills gaps, prefer YF where present)
-    df_merged = None
-    if df_yf is not None and df_twse is not None:
-        df_merged = df_yf.copy()
-        df_merged = df_merged.combine_first(df_twse)
-    elif df_yf is not None:
-        df_merged = df_yf
-    elif df_twse is not None:
-        df_merged = df_twse
-
-    if df_merged is not None and not df_merged.empty:
-        return df_merged
+    if df_twse is not None and not df_twse.empty:
+        return _validated_ohlcv(df_twse, source="twse", auto_adjust=False)
 
     # Secondary: Alpha Vantage (requires API key)
     df_av = _fetch_alpha_vantage_ohlcv(ticker_yt, start=start, end=end, auto_adjust=auto_adjust)
     if df_av is not None and not df_av.empty:
-        return df_av
-
-    # Last resort: if merged fetch failed
-    if df_merged is not None and not df_merged.empty:
-        return df_merged
+        return _validated_ohlcv(df_av, source="alpha_vantage", auto_adjust=auto_adjust)
 
     raise RuntimeError("Unable to fetch OHLCV from Yahoo or Alpha Vantage.")
 
@@ -671,9 +681,15 @@ def _fetch_alpha_vantage_ohlcv(
                     if "Adj Close" not in df.columns and "Close" in df.columns:
                         df["Adj Close"] = df["Close"]
 
-                    # Respect auto_adjust: replace Close with Adj Close when requested
-                    if auto_adjust and "Adj Close" in df.columns:
-                        df["Close"] = df["Adj Close"]
+                    # Apply the same adjustment factor to every price field.
+                    # Replacing Close alone would create internally inconsistent
+                    # OHLC bars and could fail High/Low envelope checks.
+                    if auto_adjust and "Adj Close" in df.columns and "Close" in df.columns:
+                        raw_close = df["Close"].replace(0, np.nan)
+                        factor = df["Adj Close"] / raw_close
+                        for price_col in ("Open", "High", "Low", "Close"):
+                            if price_col in df.columns:
+                                df[price_col] = df[price_col] * factor
 
                     # Reorder/ensure expected columns
                     cols = [c for c in ["Open", "High", "Low", "Close", "Adj Close", "Volume"] if c in df.columns]
@@ -795,3 +811,4 @@ def _fetch_cboe_vix_series(kind: str) -> Optional[pd.Series]:
         return s
     except Exception:
         return None
+
