@@ -35,6 +35,21 @@ class OhlcvAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "price/volume constraints"):
             audit_ohlcv(frame)
 
+    def test_allows_subcent_adjustment_rounding(self):
+        frame = pd.DataFrame(
+            {
+                "Open": [475.0],
+                "High": [478.64790],
+                "Low": [473.0],
+                "Close": [478.64791],
+                "Volume": [1000],
+            },
+            index=pd.to_datetime(["2020-12-31"]),
+        )
+        clean, report = audit_ohlcv(frame)
+        self.assertEqual(len(clean), 1)
+        self.assertEqual(report["invalid_market_rows"], 0)
+
 
 class SavedRunAuditTests(unittest.TestCase):
     def _write_json(self, path: Path, value):
