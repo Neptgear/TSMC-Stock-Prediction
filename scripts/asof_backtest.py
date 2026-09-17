@@ -92,12 +92,52 @@ def _evaluate_sequence(sequence, actual_adjusted, actual_raw, cutoff_close):
     }
 
 
+def _price_baselines(training_data, forecast_dates, cutoff_close):
+    """Forecasts that a learned model must beat on MAE/RMSE."""
+    closes = training_data["Close"].astype(float)
+
+    def constant(value):
+        return [{"date": item["date"], "value": float(value)} for item in forecast_dates]
+
+    linear_window = min(60, len(closes))
+    y = closes.iloc[-linear_window:].to_numpy(dtype=float)
+    x = np.arange(linear_window, dtype=float)
+    slope, intercept = np.polyfit(x, y, 1)
+    linear_values = intercept + slope * np.arange(
+        linear_window, linear_window + len(forecast_dates), dtype=float
+    )
+
+    return {
+        "naive_last_close": {
+            "forecast": constant(cutoff_close),
+            "description": "每一天都預測為截止日調整後收盤價",
+        },
+        "sma_5": {
+            "forecast": constant(closes.tail(5).mean()),
+            "description": "每一天都預測為截止日前五日平均收盤價",
+        },
+        "sma_20": {
+            "forecast": constant(closes.tail(20).mean()),
+            "description": "每一天都預測為截止日前二十日平均收盤價",
+        },
+        "linear_trend_60": {
+            "forecast": [
+                {"date": item["date"], "value": float(value)}
+                for item, value in zip(forecast_dates, linear_values)
+            ],
+            "description": "以截止日前六十日收盤價線性趨勢外推",
+        },
+    }
+
+
 def _markdown(report):
     lines = [
         "# TSMC as-of 四日預測回測",
         "",
         f"- 資料截止：{report['cutoff']}",
         f"- 預測期間：{report['forecast_start']} 至 {report['forecast_end']}",
+        "- 主要目標：最低樣本外調整後收盤價 MAE；RMSE 為次要指標。",
+        "- 模型以驗證集 MAE 選擇 checkpoint，Transformer 使用 Huber loss 訓練。",
         "- 模型輸入使用 Yahoo Finance 調整後 OHLCV；交易所原始收盤價另列供參考。",
         "- 實際值只在模型完成預測後讀取，不參與訓練、縮放或特徵計算。",
         "",
@@ -150,6 +190,7 @@ def main() -> int:
     parser.add_argument("--start", default="2020-01-01")
     parser.add_argument("--horizon", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--models", default="transformer,tft")
     parser.add_argument("--output", default="artifacts/asof-backtest-2026-09-11.json")
     args = parser.parse_args()
@@ -177,6 +218,9 @@ def main() -> int:
             dim_feedforward=128,
             dropout=0.1,
             patience=4,
+            loss="huber",
+            selection_metric="mae",
+            random_seed=args.seed,
             residualize=True,
             train_ratio=0.8,
             val_ratio=0.1,
@@ -206,18 +250,19 @@ def main() -> int:
         )
 
     forecast_dates = model_results[model_names[0]]["forecast"]
-    naive_forecast = [
-        {"date": item["date"], "value": cutoff_close} for item in forecast_dates
-    ]
-    model_results["naive_last_close"] = {
-        "forecast": naive_forecast,
-        "description": "每一天都預測為截止日調整後收盤價",
-        "evaluation": _evaluate_sequence(
-            naive_forecast, actual_adjusted, actual_raw, cutoff_close
-        ),
-    }
+    for baseline_name, baseline in _price_baselines(
+        training_data, forecast_dates, cutoff_close
+    ).items():
+        baseline["evaluation"] = _evaluate_sequence(
+            baseline["forecast"], actual_adjusted, actual_raw, cutoff_close
+        )
+        model_results[baseline_name] = baseline
     report = {
         "method": "sealed as-of direct multi-horizon backtest",
+        "primary_objective": "lowest out-of-sample adjusted-close MAE, RMSE as secondary",
+        "model_selection_metric": "validation_mae",
+        "optimization_loss": "huber",
+        "random_seed": int(args.seed),
         "ticker": "2330.TW",
         "cutoff": args.cutoff,
         "forecast_start": forecast_dates[0]["date"],

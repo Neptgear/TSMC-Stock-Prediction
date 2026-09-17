@@ -55,20 +55,26 @@ python scripts/audit_saved_run.py runs/<run-id> --output audit.json
 
 這項測試將可見資料鎖定在 2026-09-11（星期五），直接預測 09-14 至 09-17 四個交易日。模型產生預測後才載入四日實際價格評分，因此本週價格不會進入特徵、縮放或模型訓練。歷史評估先使用互不重疊的訓練／驗證／測試標籤；產生未來預測前，再使用截至 09-11 已知的全部 1,252 個監督樣本微調六輪。
 
-模型輸入與誤差使用 Yahoo Finance 調整後收盤價，避免除息造成不連續；表格同時保留交易所原始收盤價。完整參數、逐日數值與限制請見 [`docs/results/asof-backtest-2026-09-11.md`](docs/results/asof-backtest-2026-09-11.md)。
+模型輸入與誤差使用 Yahoo Finance 調整後收盤價，避免除息造成不連續；表格同時保留交易所原始收盤價。依專案目標，checkpoint 以截止日前驗證集 MAE 選擇，Transformer 使用 Huber loss，沒有用四日實際價格回頭調參。完整參數、逐日數值與限制請見 [`docs/results/asof-backtest-2026-09-11.md`](docs/results/asof-backtest-2026-09-11.md)。
 
 | 方法 | 四日 MAE | 四日 RMSE | 每日方向正確率 | 與最後收盤基準比較 |
 | --- | ---: | ---: | ---: | --- |
-| Transformer | 28.80 | 29.99 | 0% | 價格誤差較差 |
-| TFT-style | 17.81 | 22.25 | 25% | 價格誤差較好，但方向仍弱 |
+| 60 日線性趨勢 | 17.03 | 21.23 | 25% | 單次四日最佳 |
+| TFT-style | 20.43 | 21.89 | 25% | 優於最後收盤基準 |
 | 最後收盤不變基準 | 24.96 | 25.14 | 0% | 基準 |
+| 20 日均價 | 25.46 | 25.71 | 0% | 較差 |
+| Transformer | 27.37 | 28.03 | 0% | 較差 |
+| 5 日均價 | 54.80 | 58.67 | 0% | 較差 |
 
-這四天不能用來宣稱模型有效：TFT-style 在價格 MAE 上勝過簡單基準，但只判對一天方向；Transformer 連價格誤差也沒有勝過基準。正確結論是流程已可核對，但模型效果仍需多期間封存回測、重複種子與更強基準驗證。
+這四天不能用來宣稱模型有效：TFT-style 在價格 MAE 上勝過最後收盤基準，但簡單線性趨勢又勝過 TFT-style；Transformer 沒有勝過基準。
+
+另外以最近 20 個互不重疊四日區間（共 80 個樣本）測試四種價格基準，最後收盤不變以 MAE 49.22 排名第一，線性趨勢則為 62.19、排名最後。因此，線性趨勢在上述單一四日勝出只是局部現象。深度模型的下一個可信門檻，是在相同 20 區間流程中穩定低於 49.22，而不是只挑一週展示。完整基準報告見 [`docs/results/rolling-price-baselines-2026-09-17.md`](docs/results/rolling-price-baselines-2026-09-17.md)。
 
 重跑命令：
 
 ```powershell
 python scripts/asof_backtest.py --cutoff 2026-09-11 --actual-end 2026-09-17 --epochs 12
+python scripts/rolling_price_baselines.py --end 2026-09-17 --periods 20 --horizon 4
 ```
 
 ## 專案角色與實作能力
@@ -128,7 +134,7 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 - **歷史保存設定存在不一致**：上述 Run 的 `config.json` 記錄 `train_ratio=0.6`，`split_info.json` 卻記錄 `ratio_samples_0.80`，測試日期範圍也與 `test_dates.json` 不同。新的稽核工具會把這類情況判定為失敗；該歷史 Run 僅能作為介面與保存格式展示，不能當作已驗證的泛化結果。
 - **部分進階參數需逐路徑確認**：介面存在 Walk Splits、Split Mode 與基本面選項，但主要 Seq2Seq／TFT 分流並不等同於後面的舊訓練路徑；不能將所有選項標為已驗證有效。
 - **模型屬研究實作**：TFT-style 與 Transformer 需要進一步做基準、消融及獨立時段測試；預測曲線與歷史方向指標不構成交易獲利證明。
-- **四日測試不是穩健性證明**：下一步應執行至少 20 個互不重疊的 rolling-origin 封存期間、重複不同種子，並與最後收盤、移動平均及線性模型比較。
+- **四日測試不是穩健性證明**：四種簡單基準已完成 20 個互不重疊 rolling-origin 區間；Transformer／TFT-style 尚須在相同區間及多個種子下完成比較。
 - **部署與推論封裝仍待補齊**：新的封存回測可重跑，但尚未把模型權重、scaler、環境雜湊與完整資料快照封裝為可直接部署的版本化產物。
 - **交易日曆仍可加強**：目前未來日期使用一般工作日，尚未整合臺灣證交所休市日曆；本次 09-14 至 09-17 不受影響。
 
@@ -146,9 +152,11 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 | [`runs_utils.py`](runs_utils.py) | Run 清單、歷史結果讀取及相關工具 |
 | [`scripts/audit_saved_run.py`](scripts/audit_saved_run.py) | 命令列結果核對工具 |
 | [`scripts/asof_backtest.py`](scripts/asof_backtest.py) | 截止日封存、多步預測與事後評分工具 |
+| [`scripts/rolling_price_baselines.py`](scripts/rolling_price_baselines.py) | 多期間價格基準與 MAE／RMSE 排名工具 |
 | [`tests/test_data_quality.py`](tests/test_data_quality.py) | 資料品質與 Run 稽核測試 |
 | [`tests/test_multihorizon_alignment.py`](tests/test_multihorizon_alignment.py) | 多步日期、目標對齊與切分隔離測試 |
 | [`docs/results/asof-backtest-2026-09-11.md`](docs/results/asof-backtest-2026-09-11.md) | 2026-09-11 截止的四日實測報告 |
+| [`docs/results/rolling-price-baselines-2026-09-17.md`](docs/results/rolling-price-baselines-2026-09-17.md) | 20 個四日區間的價格基準報告 |
 | [`runs/`](runs/) | 已保存的實驗資料 |
 
 說明最後核對：2026-09-17。本次同時修改資料取得、主要訓練前處理、結果稽核工具與測試；既有歷史 Run 保留原狀。

@@ -26,6 +26,16 @@ class TrainingPreprocessingTests(unittest.TestCase):
             fit_position = body.index("SequenceStandardScaler().fit(enc_train)")
             self.assertGreater(fit_position, split_position)
             self.assertIn("enc_future = obs_scaler.transform", body)
+            self.assertIn('getattr(cfg, "selection_metric", "mae")', body)
+            self.assertIn("copy.deepcopy(model.state_dict())", body)
+            self.assertEqual(body.count("val_losses.append"), 1)
+
+    def test_active_models_use_configured_seed(self):
+        for body in (
+            _function_body("run_training_transformer_seq2seq", "run_training_tft_full"),
+            _function_body("run_training_tft_full", "build_seq2seq_tensors"),
+        ):
+            self.assertIn("seed_everything(cfg.random_seed)", body)
 
 
 if __name__ == "__main__":
