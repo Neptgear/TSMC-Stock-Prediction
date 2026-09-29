@@ -70,7 +70,11 @@ python scripts/audit_saved_run.py runs/<run-id> --output audit.json
 
 另外以最近 20 個互不重疊四日區間（共 80 個樣本）測試四種價格基準，最後收盤不變以 MAE 49.22 排名第一，線性趨勢則為 62.19、排名最後。因此，線性趨勢在上述單一四日勝出只是局部現象。深度模型的下一個可信門檻，是在相同 20 區間流程中穩定低於 49.22，而不是只挑一週展示。完整基準報告見 [`docs/results/rolling-price-baselines-2026-09-17.md`](docs/results/rolling-price-baselines-2026-09-17.md)。
 
-縮小版模型接著完成 20 區間 × 3 種子測試，共 120 次訓練、480 筆預測。Transformer 三個種子的 MAE 為 49.01、49.13、48.82，依預定數值規則皆低於 49.22；TFT-style 為 48.61、49.25、49.05，其中一個種子未通過。不過兩模型相對基準的成對 bootstrap 95% 信賴區間全部跨過零，因此不能宣稱已有明顯優勢。完整方法與逐種子結論見 [`docs/results/rolling-models-20x3-2026-09-17.md`](docs/results/rolling-models-20x3-2026-09-17.md)。
+縮小版模型接著完成 20 區間 × 3 種子測試，共 120 次訓練、480 筆預測。Transformer 三個種子的 MAE 為 49.01、49.13、48.82，依預定數值規則皆低於 49.22；TFT-style 為 48.61、49.25、49.05，其中一個種子未通過。不過兩模型相對基準的成對 cluster bootstrap 95% 信賴區間全部跨過零，因此不能宣稱已有明顯優勢。重抽樣單位是完整四日區間，避免把同一區間內的四天誤當成彼此獨立樣本。完整方法與逐種子結論見 [`docs/results/rolling-models-20x3-2026-09-17.md`](docs/results/rolling-models-20x3-2026-09-17.md)。
+
+![20 區間三種子模型比較](docs/assets/05-tsmc-rolling-models.svg)
+
+上圖左側比較每個模型種子的 MAE 與 49.22 基準，右側呈現相對基準的 95% 信賴區間；六組區間都跨過零，視覺上可直接區分「數值略低」與「已有明確優勢」這兩種不同結論。
 
 重跑命令：
 
