@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Transformer 與 TFT-style 的 20 區間、3 種子價格誤差比較</title>
+  <desc id="desc">左側比較六個模型種子的 MAE 與最後收盤基準；右側顯示相對基準的四日區間 cluster bootstrap 95% 信賴區間，所有區間皆跨過零。</desc>
+  <rect width="1200" height="720" fill="#f8fafc"/>
+  <rect x="36" y="32" width="1128" height="656" rx="22" fill="#ffffff" stroke="#dbe4ee"/>
+  <text x="72" y="82" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="30" font-weight="700" fill="#102a43">20 區間 × 3 種子：價格誤差穩定性</text>
+  <text x="72" y="114" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="16" fill="#52667a">120 次訓練 · 480 筆預測 · MAE 越低越好 · 調整後收盤價</text>
+
+  <text x="72" y="162" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="20" font-weight="700" fill="#102a43">各種子 MAE（放大 48.4–49.5）</text>
+  <line x1="170" y1="200" x2="470" y2="200" stroke="#9fb3c8"/>
+  <line x1="170" y1="194" x2="170" y2="206" stroke="#486581"/>
+  <line x1="306" y1="194" x2="306" y2="206" stroke="#486581"/>
+  <line x1="443" y1="194" x2="443" y2="206" stroke="#486581"/>
+  <text x="170" y="226" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" fill="#627d98">48.4</text>
+  <text x="306" y="226" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" fill="#627d98">48.9</text>
+  <text x="443" y="226" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" fill="#627d98">49.4</text>
+  <line x1="393" y1="186" x2="393" y2="542" stroke="#d64545" stroke-width="2" stroke-dasharray="7 6"/>
+  <text x="393" y="180" text-anchor="middle" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="13" fill="#b42318">基準 49.22</text>
+
+  <g font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="15" fill="#334e68">
+    <text x="72" y="271">Transformer · 11</text><circle cx="336" cy="266" r="8" fill="#2563eb"/><text x="351" y="271">49.01</text>
+    <text x="72" y="321">Transformer · 42</text><circle cx="369" cy="316" r="8" fill="#2563eb"/><text x="384" y="321">49.13</text>
+    <text x="72" y="371">Transformer · 97</text><circle cx="284" cy="366" r="8" fill="#2563eb"/><text x="299" y="371">48.82</text>
+    <text x="72" y="431">TFT-style · 11</text><circle cx="227" cy="426" r="8" fill="#0f9d76"/><text x="242" y="431">48.61</text>
+    <text x="72" y="481">TFT-style · 42</text><circle cx="401" cy="476" r="8" fill="#0f9d76"/><text x="416" y="481">49.25</text>
+    <text x="72" y="531">TFT-style · 97</text><circle cx="347" cy="526" r="8" fill="#0f9d76"/><text x="362" y="531">49.05</text>
+  </g>
+
+  <line x1="518" y1="150" x2="518" y2="560" stroke="#dbe4ee"/>
+  <text x="552" y="162" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="20" font-weight="700" fill="#102a43">相對基準 MAE 差與 95% CI</text>
+  <text x="552" y="187" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="14" fill="#627d98">負值代表模型較好；重抽樣單位為完整四日區間</text>
+  <line x1="575" y1="218" x2="1055" y2="218" stroke="#9fb3c8"/>
+  <line x1="575" y1="212" x2="575" y2="224" stroke="#486581"/><text x="575" y="244" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" fill="#627d98">-3</text>
+  <line x1="815" y1="200" x2="815" y2="542" stroke="#d64545" stroke-width="2" stroke-dasharray="7 6"/><text x="815" y="196" text-anchor="middle" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="13" fill="#b42318">無差異 0</text>
+  <line x1="1055" y1="212" x2="1055" y2="224" stroke="#486581"/><text x="1055" y="244" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" fill="#627d98">+3</text>
+
+  <g stroke-width="4" stroke-linecap="round">
+    <line x1="701" y1="266" x2="892" y2="266" stroke="#93b4f4"/><circle cx="798" cy="266" r="7" fill="#2563eb" stroke="none"/>
+    <line x1="582" y1="316" x2="1023" y2="316" stroke="#93b4f4"/><circle cx="808" cy="316" r="7" fill="#2563eb" stroke="none"/>
+    <line x1="653" y1="366" x2="908" y2="366" stroke="#93b4f4"/><circle cx="784" cy="366" r="7" fill="#2563eb" stroke="none"/>
+    <line x1="660" y1="426" x2="872" y2="426" stroke="#7bcdb4"/><circle cx="766" cy="426" r="7" fill="#0f9d76" stroke="none"/>
+    <line x1="743" y1="476" x2="892" y2="476" stroke="#7bcdb4"/><circle cx="817" cy="476" r="7" fill="#0f9d76" stroke="none"/>
+    <line x1="657" y1="526" x2="945" y2="526" stroke="#7bcdb4"/><circle cx="801" cy="526" r="7" fill="#0f9d76" stroke="none"/>
+  </g>
+
+  <rect x="72" y="585" width="1056" height="72" rx="14" fill="#fff7e6" stroke="#f5c26b"/>
+  <text x="96" y="615" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="18" font-weight="700" fill="#8a4b08">結論</text>
+  <text x="96" y="642" font-family="Segoe UI, Noto Sans TC, sans-serif" font-size="16" fill="#6b4f2a">Transformer 三種子數值皆略低於基準；但所有信賴區間跨過 0，尚無明確統計優勢。TFT-style 另有一種子未過門檻。</text>
+</svg>
+
