@@ -83,13 +83,31 @@ def _summarize(completed, baseline_report, models, seeds):
                 ],
                 dtype=float,
             )
-            if paired_deltas.size:
+            # The four errors inside one forecast period share one cutoff and
+            # one fitted model, so they are not independent observations.
+            # Resample whole period-level means instead of individual days.
+            period_deltas = np.asarray(
+                [
+                    float(
+                        np.mean(
+                            np.abs(np.asarray(row["errors"], dtype=float))
+                            - np.abs(
+                                float(row["cutoff_close"])
+                                - np.asarray(row["actual"], dtype=float)
+                            )
+                        )
+                    )
+                    for row in runs
+                ],
+                dtype=float,
+            )
+            if period_deltas.size:
                 bootstrap_means = np.mean(
-                    paired_deltas[
+                    period_deltas[
                         rng.integers(
                             0,
-                            paired_deltas.size,
-                            size=(20000, paired_deltas.size),
+                            period_deltas.size,
+                            size=(20000, period_deltas.size),
                         )
                     ],
                     axis=1,
@@ -108,6 +126,7 @@ def _summarize(completed, baseline_report, models, seeds):
                 "below_naive_threshold": bool(errors.size and np.mean(np.abs(errors)) < threshold),
                 "mae_delta_vs_naive": float(np.mean(paired_deltas)) if paired_deltas.size else None,
                 "paired_bootstrap_ci95": ci95,
+                "bootstrap_unit": "four_day_period",
                 "statistically_clear_improvement": bool(ci95[1] is not None and ci95[1] < 0),
             }
         valid_maes = [row["mae"] for row in seed_rows.values() if row["mae"] is not None]
