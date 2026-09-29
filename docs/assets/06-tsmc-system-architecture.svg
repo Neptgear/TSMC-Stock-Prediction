@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="690" viewBox="0 0 1200 690" role="img" aria-labelledby="title desc">
+  <title id="title">台積電股價預測研究原型系統架構</title>
+  <desc id="desc">行情與品質檢查經過特徵處理，進入Transformer與TFT-style模型，再與簡單基準比較，最後呈現在網頁與實驗報告；自動測試和結果稽核橫跨整個流程。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/><stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .title{font:700 30px 'Segoe UI','Noto Sans TC',sans-serif;fill:#0f172a}
+      .sub{font:400 16px 'Segoe UI','Noto Sans TC',sans-serif;fill:#475569}
+      .h{font:700 20px 'Segoe UI','Noto Sans TC',sans-serif;fill:#0f172a}
+      .t{font:400 15px 'Segoe UI','Noto Sans TC',sans-serif;fill:#334155}
+      .tag{font:700 14px 'Segoe UI','Noto Sans TC',sans-serif;fill:#fff}
+      .box{stroke:#cbd5e1;stroke-width:1.5;rx:18;filter:url(#shadow)}
+      .arrow{stroke:#64748b;stroke-width:2.4;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="690" fill="url(#bg)"/>
+  <text x="60" y="58" class="title">TSMC Stock Prediction｜可稽核的時間序列研究流程</text>
+  <text x="60" y="88" class="sub">截止日隔離 → 訓練資料擬合 → 簡單基準 → 多區間、多種子評估 → 誠實解讀</text>
+
+  <rect x="55" y="140" width="190" height="145" fill="#ffffff" class="box"/>
+  <rect x="73" y="158" width="56" height="25" rx="12" fill="#0284c7"/>
+  <text x="87" y="176" class="tag">資料</text>
+  <text x="74" y="215" class="h">OHLCV 行情</text>
+  <text x="74" y="244" class="t">Yahoo Finance</text>
+  <text x="74" y="268" class="t">日期與品質稽核</text>
+
+  <rect x="285" y="140" width="190" height="145" fill="#ffffff" class="box"/>
+  <rect x="303" y="158" width="56" height="25" rx="12" fill="#0891b2"/>
+  <text x="317" y="176" class="tag">特徵</text>
+  <text x="304" y="215" class="h">時間序列處理</text>
+  <text x="304" y="244" class="t">均線、RSI、MACD</text>
+  <text x="304" y="268" class="t">只用訓練集擬合縮放</text>
+
+  <rect x="515" y="125" width="210" height="175" fill="#ffffff" class="box"/>
+  <rect x="533" y="143" width="56" height="25" rx="12" fill="#7c3aed"/>
+  <text x="547" y="161" class="tag">模型</text>
+  <text x="534" y="202" class="h">直接多步預測</text>
+  <text x="534" y="235" class="t">Transformer</text>
+  <text x="534" y="261" class="t">TFT-style</text>
+  <text x="534" y="285" class="t">多種子重新訓練</text>
+
+  <rect x="765" y="140" width="190" height="145" fill="#ffffff" class="box"/>
+  <rect x="783" y="158" width="56" height="25" rx="12" fill="#ea580c"/>
+  <text x="797" y="176" class="tag">評估</text>
+  <text x="784" y="215" class="h">Rolling-origin</text>
+  <text x="784" y="244" class="t">20個四日區間</text>
+  <text x="784" y="268" class="t">基準與信賴區間</text>
+
+  <rect x="995" y="140" width="150" height="145" fill="#ffffff" class="box"/>
+  <rect x="1013" y="158" width="56" height="25" rx="12" fill="#059669"/>
+  <text x="1027" y="176" class="tag">展示</text>
+  <text x="1014" y="215" class="h">網頁與報告</text>
+  <text x="1014" y="244" class="t">Flask + Plotly</text>
+  <text x="1014" y="268" class="t">保存與視覺化</text>
+
+  <path d="M245 213 H278" class="arrow"/><path d="M475 213 H508" class="arrow"/>
+  <path d="M725 213 H758" class="arrow"/><path d="M955 213 H988" class="arrow"/>
+
+  <rect x="90" y="365" width="1020" height="120" fill="#0f172a" rx="22" filter="url(#shadow)"/>
+  <text x="125" y="406" style="font:700 20px 'Segoe UI','Noto Sans TC',sans-serif;fill:#f8fafc">橫跨全流程的可信度控制</text>
+  <text x="125" y="442" style="font:400 16px 'Segoe UI','Noto Sans TC',sans-serif;fill:#cbd5e1">資料洩漏檢查　｜　多步日期對齊測試　｜　保存結果稽核　｜　四日區間 cluster bootstrap</text>
+  <text x="125" y="468" style="font:400 16px 'Segoe UI','Noto Sans TC',sans-serif;fill:#cbd5e1">一鍵離線作品檢查　｜　GitHub Actions 自動測試　｜　限制與失敗結果保留</text>
+
+  <rect x="90" y="530" width="1020" height="105" fill="#ffffff" rx="22" stroke="#a5b4fc" stroke-width="2"/>
+  <text x="125" y="572" class="h">目前可支持的結論</text>
+  <text x="125" y="606" class="t">Transformer 在三個種子中數值一致略低於 MAE 49.22 基準，但改善幅度小、95% 信賴區間跨 0，尚無明確統計優勢。</text>
+</svg>
+
