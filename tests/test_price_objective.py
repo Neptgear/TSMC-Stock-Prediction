@@ -67,6 +67,10 @@ class PriceObjectiveTests(unittest.TestCase):
         self.assertEqual(threshold, 2.0)
         self.assertTrue(summary["transformer"]["stable_below_naive_threshold"])
         self.assertTrue(summary["transformer"]["all_seeds_statistically_clear"])
+        self.assertEqual(
+            summary["transformer"]["seeds"]["11"]["bootstrap_unit"],
+            "four_day_period",
+        )
 
 
 if __name__ == "__main__":
