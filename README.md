@@ -4,6 +4,18 @@
 
 本專案定位為具網頁介面的資料分析工具與研究原型。它呈現從資料處理、模型訓練到結果展示的整合過程；目前沒有券商下單、交易執行或經成本驗證的投資績效。
 
+## 推甄快速導覽
+
+如果只有三分鐘，建議依序查看：
+
+1. [`docs/portfolio-case-study.md`](docs/portfolio-case-study.md)：研究問題、系統架構、個人實作、驗證方法與面試展示腳本。
+2. [`docs/results/rolling-models-20x3-2026-09-17.md`](docs/results/rolling-models-20x3-2026-09-17.md)：120 次訓練、480 筆預測與統計限制。
+3. [`docs/visual-guide.md`](docs/visual-guide.md)：初學者操作方式、圖表與指標解讀。
+
+![台積電股價預測研究原型系統架構](docs/assets/06-tsmc-system-architecture.svg)
+
+本作品的重點不是宣稱能準確預知股價，而是展示如何把問題轉化為可稽核的時間序列實驗：控制截止日、防止資料洩漏、建立簡單基準、多區間重複測試，再誠實區分「數值略勝」與「有明確證據」。
+
 ## 先看圖文成果
 
 ![保存的 TFT-style 實驗曲線：真實值與預測值對照](docs/assets/04-tsmc-archived-result.png)
