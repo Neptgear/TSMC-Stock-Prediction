@@ -49,7 +49,8 @@ class AppSmokeTests(unittest.TestCase):
         response = flask_app.test_client().get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"TSMC", response.data)
+        self.assertIn(b"TA Stock Transformer", response.data)
+        self.assertIn(b"2330.TW", response.data)
 
 
 if __name__ == "__main__":
