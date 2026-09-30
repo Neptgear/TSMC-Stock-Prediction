@@ -9,8 +9,15 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .yf-cache/
+.coverage
+htmlcov/
 
 # Local reports and runtime artifacts
 artifacts/
 audit.json
+audit*.json
+*.log
+*.out
+*.err
+dist/
 

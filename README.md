@@ -1,5 +1,9 @@
 # TSMC Stock Prediction
 
+[![Tests](https://github.com/Neptgear/TSMC-Stock-Prediction/actions/workflows/tests.yml/badge.svg)](https://github.com/Neptgear/TSMC-Stock-Prediction/actions/workflows/tests.yml)
+![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB)
+![Research prototype](https://img.shields.io/badge/status-research_prototype-0f766e)
+
 台積電股價時間序列分析與模型比較原型。專案使用 Python、Flask、PyTorch 與 Plotly，整合行情資料、技術指標、Transformer／TFT-style 模型訓練、預測圖表及歷次實驗結果，讓使用者能從網頁設定分析條件並查看結果。
 
 本專案定位為具網頁介面的資料分析工具與研究原型。它呈現從資料處理、模型訓練到結果展示的整合過程；目前沒有券商下單、交易執行或經成本驗證的投資績效。
@@ -11,6 +15,7 @@
 1. [`docs/portfolio-case-study.md`](docs/portfolio-case-study.md)：研究問題、系統架構、個人實作、驗證方法與面試展示腳本。
 2. [`docs/results/rolling-models-20x3-2026-09-17.md`](docs/results/rolling-models-20x3-2026-09-17.md)：120 次訓練、480 筆預測與統計限制。
 3. [`docs/visual-guide.md`](docs/visual-guide.md)：初學者操作方式、圖表與指標解讀。
+4. [`docs/release-validation.md`](docs/release-validation.md)：乾淨環境測試、作品證據核對與公開範圍。
 
 ![台積電股價預測研究原型系統架構](docs/assets/06-tsmc-system-architecture.svg)
 
@@ -114,7 +119,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m flask --app app:create_app run --host 127.0.0.1 --port 5000
 ```
 
-在瀏覽器開啟 `http://127.0.0.1:5000`。私人倉庫需有 GitHub 存取權限才能複製。網頁圖表若使用外部 Plotly 資源，還需要對應的網路連線。
+在瀏覽器開啟 `http://127.0.0.1:5000`。本倉庫已公開，可直接使用上方指令複製；網頁圖表若使用外部 Plotly 資源，還需要對應的網路連線。
 
 Alpha Vantage 為選用資料來源，可使用 `ALPHAVANTAGE_API_KEY` 環境變數，或參考 `secrets_local.example.py` 建立未提交的本機設定；不要把實際金鑰貼入說明或提交到版本控制。
 
@@ -180,5 +185,13 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 | [`docs/results/rolling-models-20x3-2026-09-17.md`](docs/results/rolling-models-20x3-2026-09-17.md) | 120 次模型訓練與信賴區間報告 |
 | [`runs/`](runs/) | 已保存的實驗資料 |
 
-說明最後核對：2026-09-17。本次同時修改資料取得、主要訓練前處理、結果稽核工具與測試；既有歷史 Run 保留原狀。
+## 公開發布驗證
+
+2026-09-30 以乾淨工作副本及 Python 3.12 環境核對：**15 項單元／啟動測試全部通過**，`scripts/verify_portfolio.py` 也確認作品文件、SVG、程式與證據檔案完整。完整命令與界線見 [發布驗證](docs/release-validation.md)。這些測試證明程式與保存證據可核對，不代表未來股價預測或投資績效。
+
+## 授權狀態
+
+本倉庫目前未附開源授權條款。公開可檢閱不代表自動授權複製、修改或再散布；資料來源、套件與模型仍適用其各自條款。
+
+說明最後核對：2026-09-30。本次同時核對資料取得、主要訓練前處理、結果稽核工具、公開文件與測試；既有歷史 Run 保留原狀。
 
