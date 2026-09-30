@@ -248,7 +248,8 @@ def load_run_results(run_dir: str) -> Dict:
     Prefers persisted test_dates/future/actual artifacts if available.
     """
     d = Path(run_dir)
-    cfg = json.load(open(d / "config.json", "r", encoding="utf-8"))
+    with open(d / "config.json", "r", encoding="utf-8") as config_file:
+        cfg = json.load(config_file)
     # Load saved arrays
     y_true = np.load(d / "y_true.npy") if (d / "y_true.npy").exists() else np.array([])
     y_pred = np.load(d / "y_pred.npy") if (d / "y_pred.npy").exists() else np.array([])
@@ -302,6 +303,7 @@ def load_run_results(run_dir: str) -> Dict:
 
     future_point = None
     actual_target = None
+    future_point_error = None
     try:
         fp = d / "future_point.json"
         if fp.exists():
@@ -421,3 +423,4 @@ def load_run_results(run_dir: str) -> Dict:
         "split_info": split_info,
         "diagnostics": diagnostics,
     }
+

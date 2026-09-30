@@ -3,6 +3,7 @@ import json
 import io
 import datetime as dt
 import time
+from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 
 import numpy as np
@@ -21,6 +22,22 @@ try:
     import yfinance as yf
 except Exception:  # pragma: no cover
     yf = None
+
+if yf is not None:
+    try:
+        # Keep yfinance's SQLite timezone/cookie cache in an explicit writable
+        # project-local directory. This avoids the Windows "unable to open
+        # database file" failure seen when the library selects an unavailable
+        # profile cache directory.
+        _yf_cache_dir = os.environ.get("YFINANCE_CACHE_DIR")
+        if not _yf_cache_dir:
+            _yf_cache_dir = str(Path(__file__).resolve().parent / ".yf-cache")
+        Path(_yf_cache_dir).mkdir(parents=True, exist_ok=True)
+        yf.set_tz_cache_location(_yf_cache_dir)
+    except Exception:
+        # Cache configuration is an optimization; provider fallbacks and the
+        # normal error path remain available if the directory cannot be used.
+        pass
 
 # Optional HTTP client for Alpha Vantage
 try:
@@ -823,4 +840,5 @@ def _fetch_cboe_vix_series(kind: str) -> Optional[pd.Series]:
         return s
     except Exception:
         return None
+
 
