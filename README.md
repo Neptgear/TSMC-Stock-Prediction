@@ -195,4 +195,12 @@ python train_transformer.py --ticker 2330.TW --start 2020-01-01 --horizon 5 --wi
 
 說明最後核對：2026-09-30。本次同時核對資料取得、主要訓練前處理、結果稽核工具、公開文件與測試；既有歷史 Run 保留原狀。
 
+# Codespaces 真實操作入口
 
+[建立自己的雲端環境](https://codespaces.new/Neptgear/TSMC-Stock-Prediction)
+· [公開網址設定與完整指南](docs/codespaces-demo.md)
+
+受限雲端模式能真正讀取行情、執行 Transformer／TFT-style CPU 訓練與
+載入成果，不只是播放圖表。為避免無上限運算，限制模型大小、期間與訓練頻率。
+建立入口會消耗建立者的 Codespaces 額度；評審應使用擁有者已啟動並公開的
+5050 網址。此環境尚須雲端部署驗證，不承諾永久在線。

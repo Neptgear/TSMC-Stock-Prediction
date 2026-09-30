@@ -1,5 +1,13 @@
 {% extends 'base.html' %}
 {% block content %}
+{% if config.PUBLIC_DEMO %}
+<div class="card" style="border:2px solid #0f766e">
+  <h2>Codespaces 真實模型 Demo（研究展示，不是投資建議）</h2>
+  <p>Fetch 可讀取實際行情；Train Transformer／Train TFT 執行真正 CPU 訓練，並非預製動畫。僅開放 2330.TW、過去 1～3 年資料、1～4 日 Horizon、1～5 Epochs，其他進階參數固定為小模型。TFT 指此專案的 TFT-style，而非完整原始 TFT。</p>
+  <p>同時僅訓練一個模型，每分鐘一次、每天最多 10 次。基本面關閉以避免未驗證的資料可得時間。少量 Epochs 為流程展示，不等同正式研究 benchmark，也不保證優於最後收盤價基準。所有訓練結果保存於本公開展示環境，其他訪客可見；請勿填寫任何私人資料。</p>
+  <p>外部行情來源可能限流或無法取得；錯誤會如實顯示，不會偷偷改用合成價格。Codespace 停止時網址離線。</p>
+</div>
+{% endif %}
 <form method="get" action="{{ url_for('index') }}">
   <div class="card">
     <div class="row">

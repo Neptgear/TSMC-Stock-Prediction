@@ -1,11 +1,14 @@
 import os
 import json
 import datetime as dt
+import secrets
+import threading
+import time
 from typing import Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, g, jsonify
 
 from data_fetch import get_ohlcv, get_fundamentals_timeseries, get_event_countdowns
 from ta_features import compute_features, compute_indicators_only, get_default_feature_columns
@@ -13,9 +16,60 @@ from train_transformer import TrainConfig, run_training, standardize_ohlcv_colum
 from runs_utils import list_runs as list_saved_runs, load_run_results
 
 
-def create_app() -> Flask:
+def create_app(public_demo=False) -> Flask:
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "devkey")
+    app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", secrets.token_hex(32) if public_demo else "devkey")
+    app.config['PUBLIC_DEMO'] = public_demo
+    app.config['MAX_CONTENT_LENGTH'] = 16_000
+    training_slot = threading.Lock()
+    budget = dict(day=dt.date.today(), count=0, last=-1000.0)
+
+    @app.before_request
+    def bound_public_requests():
+        if not public_demo: return None
+        host = request.host
+        cloud = os.environ.get('CODESPACE_NAME', '')
+        allowed = {'127.0.0.1:5050', 'localhost:5050'}
+        if cloud:
+            allowed.add(f"{cloud}-5050.app.github.dev")
+        if host not in allowed: return jsonify(error='Host not allowed'), 403
+        origin = request.headers.get('Origin')
+        if origin and origin != f'https://{cloud}-5050.app.github.dev':
+            return jsonify(error='Origin not allowed'), 403
+        if request.headers.get('Sec-Fetch-Site') == 'cross-site' and (
+                request.method != 'GET' or request.args.get('do', 'view') not in ('view', 'load')):
+            return jsonify(error='Cross-site request blocked'), 403
+        if request.path != '/': return None
+        try:
+            from public_demo_policy import public_parameters
+            g.demo_parameters = public_parameters(request.values)
+        except (ValueError, TypeError):
+            return jsonify(error='請使用台積電、過去 1～3 年資料、Horizon 1～4、Epochs 1～5，且僅執行單一模型訓練或載入。'), 400
+        if g.demo_parameters['do'] in ('train_transformer', 'train_tft'):
+            if not training_slot.acquire(blocking=False):
+                return jsonify(error='模型正在訓練，請稍後再試。'), 429
+            g.training_locked = True
+            if budget['day'] != dt.date.today():
+                budget.update(day=dt.date.today(), count=0)
+            if budget['count'] >= 10 or time.monotonic() - budget['last'] < 60:
+                return jsonify(error='展示訓練額度：每分鐘一次，每天最多 10 次。'), 429
+            budget['count'] += 1; budget['last'] = time.monotonic()
+
+    @app.teardown_request
+    def release_training(_error):
+        if getattr(g, 'training_locked', False):
+            training_slot.release(); g.training_locked = False
+
+    @app.after_request
+    def no_cache(response):
+        if public_demo:
+            response.headers['Cache-Control'] = 'no-store'
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+
+    @app.get('/health')
+    def health():
+        return jsonify(status='ok', public_demo=public_demo)
 
     def _hyperparams_for_h(h: int) -> Dict[str, Any]:
         """Preset hyperparameters tuned by horizon buckets."""
@@ -114,7 +168,7 @@ def create_app() -> Flask:
     @app.route("/", methods=["GET", "POST"])
     def index():
         # Read params from GET/POST
-        req = request.values
+        req = g.demo_parameters if public_demo else request.values
         ticker = req.get("ticker", "2330.TW")
         # Default start date shown in the UI
         default_start = "2022-01-01"

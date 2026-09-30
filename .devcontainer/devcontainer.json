@@ -1,0 +1,11 @@
+{
+  "name": "TSMC real CPU model demo",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  "features": { "ghcr.io/devcontainers/features/github-cli:1": {} },
+  "hostRequirements": { "cpus": 2, "memory": "8gb", "storage": "32gb" },
+  "forwardPorts": [5050],
+  "portsAttributes": { "5050": { "label": "TSMC real model demo", "onAutoForward": "openBrowser", "protocol": "http" } },
+  "postCreateCommand": "python -m venv .venv-cloud && .venv-cloud/bin/python -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu && .venv-cloud/bin/python -m pip install -r requirements.txt gunicorn==23.0.0",
+  "postStartCommand": "bash scripts/codespaces_start.sh",
+  "remoteUser": "vscode"
+}
